@@ -7,6 +7,7 @@
 #   SOURCE=test ./sender.sh          test pattern, no camera latency
 #   ENCODER=vaapi ./sender.sh        Intel hardware encoder
 #   HOST=192.168.1.20 ./sender.sh    send to another machine
+#   PREVIEW=1 ./sender.sh            also show the frames before encoding (closing it stops the sender)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -18,6 +19,7 @@ BITRATE=${BITRATE:-4M}
 ENCODER=${ENCODER:-x264}    # x264 | vaapi
 HOST=${HOST:-127.0.0.1}
 PORT=${PORT:-5600}
+PREVIEW=${PREVIEW:-0}
 
 case $SOURCE in
   webcam) input=(-fflags nobuffer -f v4l2 -input_format mjpeg -video_size "$SIZE" -framerate "$FPS" -i "$DEVICE") ;;
@@ -28,18 +30,32 @@ esac
 # Burn the wall-clock time (UTC, ms) into each frame as ffmpeg sees it.
 overlay="drawtext=textfile=$PWD/overlay.txt:font=monospace:fontsize=40:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=8:x=20:y=h-th-28"
 
+hw=()
 case $ENCODER in
   x264)
-    encode=(-vf "$overlay,format=yuv420p"
-            -c:v libx264 -preset ultrafast -tune zerolatency -x264-params repeat-headers=1) ;;
+    upload="format=yuv420p"
+    codec=(-c:v libx264 -preset ultrafast -tune zerolatency -x264-params repeat-headers=1) ;;
   vaapi)
-    encode=(-vaapi_device /dev/dri/renderD128 -vf "$overlay,format=nv12,hwupload"
-            -c:v h264_vaapi) ;;
+    hw=(-vaapi_device /dev/dri/renderD128)
+    upload="format=nv12,hwupload"
+    codec=(-c:v h264_vaapi) ;;
   *) echo "unknown ENCODER: $ENCODER" >&2; exit 1 ;;
 esac
 
 # No B-frames, 1 s keyframe interval, small packets (wfb-ng payloads must fit one WiFi frame).
-exec ffmpeg -hide_banner -loglevel warning -stats \
-  "${input[@]}" \
-  "${encode[@]}" -fps_mode passthrough -bf 0 -g "$FPS" -b:v "$BITRATE" -maxrate "$BITRATE" \
-  -f rtp -payload_type 96 "rtp://$HOST:$PORT?pkt_size=1200"
+stream=(-map "[enc]" "${codec[@]}" -fps_mode passthrough -bf 0 -g "$FPS" -b:v "$BITRATE" -maxrate "$BITRATE"
+        -f rtp -payload_type 96 "rtp://$HOST:$PORT?pkt_size=1200")
+
+if [[ $PREVIEW == 1 ]]; then
+  # Split after the overlay: one copy to the encoder, one uncompressed to a local window.
+  ffmpeg -hide_banner -loglevel warning -stats "${hw[@]}" "${input[@]}" \
+    -filter_complex "[0:v]$overlay,split[a][preview];[a]$upload[enc]" \
+    "${stream[@]}" \
+    -map "[preview]" -c:v rawvideo -pix_fmt yuv420p -fps_mode passthrough -f nut pipe:1 \
+  | ffplay -hide_banner -loglevel warning -window_title "TX preview (before encoding)" \
+      -fflags nobuffer -flags low_delay -framedrop -sync ext -f nut -i -
+else
+  exec ffmpeg -hide_banner -loglevel warning -stats "${hw[@]}" "${input[@]}" \
+    -filter_complex "[0:v]$overlay,$upload[enc]" \
+    "${stream[@]}"
+fi

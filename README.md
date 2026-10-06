@@ -12,11 +12,11 @@ The receiver listens on port 5600, where wfb_rx delivers by default. With the li
 ## Quick start (two machines)
 
 ```sh
-./tx.sh     # machine with the webcam + injection-capable adapter (the Ralink)
-./rx.sh     # other machine: the video window opens here
+./tx.sh     # machine with the webcam + injection-capable adapter: preview of what is sent
+./rx.sh     # other machine: the received video opens here
 ```
 
-Each one asks for your sudo password, runs its half of the radio link and the sender or receiver, and stops it all on Ctrl-C. `rx.sh` also stops when you close the video window. The WiFi card is offline while the link runs.
+Each one asks for your sudo password, runs its half of the radio link and the sender or receiver, and stops it all on Ctrl-C, when you close its window, or when the radio link stops. Compare the `TX` timestamp in both windows to see what the link adds. The WiFi card is offline while the link runs.
 
 ## Setup
 
@@ -63,6 +63,14 @@ sudo ./link.sh rx
 ```
 
 Across a room, raise the transmit power: `sudo TX_POWER=2000 ./link.sh tx` (20 dBm). Press Ctrl-C in terminal 1 to hand the adapters back to NetworkManager. The keys in `keys/` come from `wfb-ng/wfb_keygen`: `drone.key` is used by the transmitter and `gs.key` by the receiver.
+
+## Check what the WiFi card hears
+
+```sh
+sudo ./sniff.sh [iface]       # default wlan0; counts frames on channel 36 (wfb-ng) and 128 (control)
+```
+
+If the card sees no beacons even on a channel with a nearby router, its monitor mode doesn't capture anything. That was the case for the Intel AX201 here.
 
 ## Measure latency
 
