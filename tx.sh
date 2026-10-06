@@ -28,7 +28,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-sudo env TX_POWER="${TX_POWER:-2000}" ./link.sh tx &
+sudo env TX_POWER="${TX_POWER:-2000}" TX_IF="${TX_IF:-wlan1}" CHANNEL="${CHANNEL:-36}" ./link.sh tx &
 link=$!
 sleep 2
 PORT=5602 PREVIEW=1 ./sender.sh &             # preview window shows what is being sent

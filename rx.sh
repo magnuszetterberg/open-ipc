@@ -28,7 +28,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-sudo ./link.sh rx &
+sudo env RX_IF="${RX_IF:-wlan0}" CHANNEL="${CHANNEL:-36}" ./link.sh rx &
 link=$!
 sleep 2
 ./receiver.sh &
