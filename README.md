@@ -1,92 +1,84 @@
 # open-ipc latency playground
 
-Webcam → H.264 → RTP/UDP → player, built to drop a wfb-ng (OpenIPC FPV) WiFi link in the middle later.
+Webcam → H.264 → wfb-ng (the OpenIPC FPV radio link) → another computer's screen, built to measure latency.
 
 ```
-now:    sender.sh → 127.0.0.1:5600 ─────────────────────────────────────→ receiver.sh
-later:  sender.sh → :5602 → wfb_tx → WiFi ))) ((( WiFi → wfb_rx → :5600 → receiver.sh
+tx machine: webcam → sender.sh → :5602 → wfb_tx → WiFi ))) ((( WiFi → wfb_rx → :5600 → receiver.sh :rx machine
 ```
 
-The receiver listens on port 5600, where wfb_rx delivers by default. With the link in place, the sender targets port 5602 (`PORT=5602`), where `link.sh` runs `wfb_tx`. That way both ends can run on one machine without a port clash.
-
-## Quick start (two machines)
+## Quick start (the setup that works)
 
 ```sh
-./tx.sh     # machine with the webcam + injection-capable adapter: preview of what is sent
-./rx.sh     # other machine: the received video opens here
+CHANNEL=6 ./tx.sh                 # XPS: sends its webcam with its Intel WiFi card
+CHANNEL=6 RX_IF=wlan1 ./rx.sh     # NUC: receives with the Ralink USB stick
 ```
 
-Each one asks for your sudo password, runs its half of the radio link and the sender or receiver, and stops it all on Ctrl-C, when you close its window, or when the radio link stops. Compare the `TX` timestamp in both windows to see what the link adds. The WiFi card is offline while the link runs.
+Run both as your normal user, not with sudo; they ask for the password themselves. Each one runs its half of the radio link plus the sender or receiver. Everything stops on Ctrl-C, when you close its window, or when the radio link stops. `tx.sh` shows a preview of what is sent and `rx.sh` shows what arrives. The WiFi card is offline while the link runs. wfb-ng is fetched and built on first run.
+
+## Results (2026-10-06)
+
+| | |
+|---|---|
+| **Working link** | XPS 13 (Intel WiFi) sending on 2.4 GHz channel 6 → NUC with a Ralink RT5572 USB stick receiving |
+| **Latency** | about **35 ms** (20–52 ms over 4 photos), from the XPS preview to the NUC window. That covers encoding, radio, decoding and display, but not the webcam's own delay. The XPS preview lags slightly behind the real send moment, so the true figure is a little higher. |
+
+What we learned about the hardware:
+
+- **Intel cards can send but can't receive.** The NUC's Intel AX201 captured nothing in monitor mode, not even beacons from the home router (`sniff.sh` showed 0 frames). The XPS's Intel card also got 0 packets as a receiver. Sending from the XPS's Intel card works.
+- **Intel cards won't transmit on 5 GHz channel 36.** It's marked "No IR" (no initiating radiation) for them, so use 2.4 GHz (`CHANNEL=6`) when an Intel card sends.
+- **The Ralink RT5572 receives well.** Its `rt2800usb` driver is built into the kernel. Whether it also transmits is unconfirmed: on channel 36 it accepted around 775 packets/s, but the only listener was an Intel card, which can't hear anything.
+- **Each end of a wfb-ng link needs a card that works in that role.** The best choice is still a pair of RTL8812AU/EU or AR9271 adapters, which handle both roles.
 
 ## Setup
 
 ```sh
 git clone --recursive https://github.com/magnuszetterberg/open-ipc.git
 cd open-ipc
-make -C wfb-ng all_bin        # needs libpcap and libsodium
+make -C wfb-ng all_bin        # optional, tx.sh/rx.sh do this; needs libpcap and libsodium
 ```
 
 `keys/` holds test keys derived from the password `change-me` (`cd keys && ../wfb-ng/wfb_keygen change-me`). The same password always gives the same pair, so every clone can talk to every other. The transmitter uses `drone.key` and the receiver uses `gs.key`. For anything beyond desk tests, generate your own pair with a real password (or none, for a random pair) and copy it to both machines. Anyone with these test keys can read and inject into the link.
 
-## Run
+## Options
 
-```sh
-./receiver.sh                 # terminal 1
-./sender.sh                   # terminal 2 (webcam, 720p, x264)
-```
+Pass these as environment variables in front of `./tx.sh` / `./rx.sh`:
 
-Options for the sender, set as environment variables: `SOURCE=webcam|test`, `ENCODER=x264|vaapi`, `SIZE=1280x720`, `FPS=30`, `BITRATE=4M`, `HOST`, `PORT`, `DEVICE`.
-Options for the receiver: `PLAYER=auto|gst|ffplay`, `PORT`.
+| variable | default | meaning |
+|---|---|---|
+| `CHANNEL` | 36 | WiFi channel, must match on both ends (use 6 when an Intel card sends) |
+| `TX_IF` / `RX_IF` | wlan1 / wlan0 | WiFi interface to use; if missing, the machine's first WiFi interface |
+| `TX_POWER` | 2000 | transmit power in mBm (2000 = 20 dBm); some cards ignore it |
 
-The GStreamer receiver needs `sudo pacman -S gst-plugins-base gst-plugins-good`; without those plugins it falls back to ffplay.
+`sender.sh` also reads `SOURCE=webcam|test`, `ENCODER=x264|vaapi`, `SIZE=1280x720`, `FPS=30`, `BITRATE=4M`, `DEVICE` and `PREVIEW=1`. `receiver.sh` reads `PLAYER=auto|gst|ffplay`. The GStreamer receiver needs gst-plugins-base and gst-plugins-good; without them it falls back to ffplay.
 
-## Over a real wfb-ng link (one machine, two adapters)
+## Pieces
 
-`link.sh` puts the Ralink stick (`wlan1`, transmitting) and the Intel card (`wlan0`, receiving) into monitor mode on channel 36, then runs `wfb_tx` and `wfb_rx` between them. Build wfb-ng first (`make -C wfb-ng all_bin`) and make sure ethernet is up, since `wlan0` drops off the network while the link runs.
+| script | does |
+|---|---|
+| `tx.sh` / `rx.sh` | one command per machine (link + sender/receiver) |
+| `link.sh [tx\|rx]` | puts the card in monitor mode and runs `wfb_tx` / `wfb_rx` (needs sudo); with no argument, runs both ends on one machine with two cards |
+| `sender.sh` | webcam or test pattern → H.264 → RTP; burns a `TX hh:mm:ss.mmm` timestamp into each frame |
+| `receiver.sh` | RTP → low-latency video window |
+| `build.sh` | fetches and builds wfb-ng if needed |
+| `sniff.sh [iface]` | counts what a card hears in monitor mode on channel 36 (wfb-ng) and 128 (a router, as a control) |
+| `clock.html` | millisecond clock for latency photos |
 
-```sh
-sudo ./link.sh                # terminal 1: the radio link
-./receiver.sh                 # terminal 2
-PORT=5602 ./sender.sh         # terminal 3: into wfb_tx instead of straight to the receiver
-```
-
-To split the two ends across two machines, pass `tx` or `rx`. If the default interface name doesn't exist, the script uses the machine's first WiFi interface. Set `TX_IF`/`RX_IF` to choose another, and use the same `CHANNEL` on both:
-
-```sh
-# transmitter machine
-sudo ./link.sh tx
-PORT=5602 ./sender.sh
-
-# receiver machine
-sudo ./link.sh rx
-./receiver.sh
-```
-
-Across a room, raise the transmit power: `sudo TX_POWER=2000 ./link.sh tx` (20 dBm). Press Ctrl-C in terminal 1 to hand the adapters back to NetworkManager. The keys in `keys/` come from `wfb-ng/wfb_keygen`: `drone.key` is used by the transmitter and `gs.key` by the receiver.
-
-## Check what the WiFi card hears
-
-```sh
-sudo ./sniff.sh [iface]       # default wlan0; counts frames on channel 36 (wfb-ng) and 128 (control)
-```
-
-If the card sees no beacons even on a channel with a nearby router, its monitor mode doesn't capture anything. That was the case for the Intel AX201 here.
+Without a radio link, `./receiver.sh` and `./sender.sh` (port 5600) stream over localhost. That gives a baseline for encoding and decoding alone.
 
 ## Measure latency
 
-1. Open `clock.html` in a browser. It shows a millisecond clock in UTC.
-2. Point the webcam at the clock and put the receiver window next to it.
-3. Take a screenshot. You'll see three times:
-   - **clock**: the time of the screenshot.
-   - **clock as seen by the webcam, in the RX window**: when the light hit the sensor.
-   - **`TX hh:mm:ss.mmm` overlay**: when ffmpeg got the frame.
+**Two machines (no clock sync needed):** open `clock.html` on the **sending** machine and photograph it next to the receiving screen. The receiving window shows the sender's clock time burned into the frame, so:
 
-   | difference                    | measures                                     |
-   |-------------------------------|----------------------------------------------|
-   | clock − webcam-seen clock     | full camera-to-screen latency                |
-   | TX overlay − webcam-seen clock | webcam latency (sensor, USB, MJPEG)          |
-   | clock − TX overlay            | encode + network + decode + display          |
+> latency = clock on the sender − `TX` timestamp on the receiver
 
-   `SOURCE=test` leaves out the camera and measures only the last row.
+Comparing the two video windows (tx preview vs rx) is quicker, but it reads a bit low because the preview itself lags.
 
-Take several screenshots and average them. A 60 Hz screen limits each reading to about ±17 ms, and a 30 fps camera to about ±33 ms. The overlay and the clock use the same wall clock, so the readings are only directly comparable when sender and receiver run on the same machine. Across two machines, sync their clocks with chrony first.
+**Including the webcam:** point the webcam at `clock.html` and put the receiving window next to it. One photo then shows three times:
+
+| difference | measures |
+|---|---|
+| clock − clock seen through the webcam | full camera-to-screen latency |
+| `TX` overlay − clock seen through the webcam | webcam latency (sensor, USB, MJPEG) |
+| clock − `TX` overlay | encode + radio + decode + display |
+
+Take several photos and average them. A 60 Hz screen limits each reading to about ±17 ms, and a 30 fps camera to about ±33 ms.
