@@ -4,10 +4,10 @@ Webcam → H.264 → RTP/UDP → player, built to drop a wfb-ng (OpenIPC FPV) Wi
 
 ```
 now:    sender.sh → 127.0.0.1:5600 ─────────────────────────────────────→ receiver.sh
-later:  sender.sh → :5600 → wfb_tx → WiFi ))) ((( WiFi → wfb_rx → :5600 → receiver.sh
+later:  sender.sh → :5602 → wfb_tx → WiFi ))) ((( WiFi → wfb_rx → :5600 → receiver.sh
 ```
 
-Both scripts already use port 5600, which is wfb-ng's default, so nothing changes when the link is added.
+The receiver listens on port 5600, where wfb_rx delivers by default. With the link in place, the sender targets port 5602 (`PORT=5602`), where `link.sh` runs `wfb_tx`. That way both ends can run on one machine without a port clash.
 
 ## Setup
 
