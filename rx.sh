@@ -4,6 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+./build.sh                                    # fetch + build wfb-ng on first run
 sudo -v                                       # ask for the password up front
 while sleep 60; do sudo -n -v; done &         # keep sudo alive for the cleanup
 keepalive=$!
