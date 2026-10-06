@@ -1,0 +1,3 @@
+[submodule "wfb-ng"]
+	path = wfb-ng
+	url = https://github.com/svpcom/wfb-ng.git
