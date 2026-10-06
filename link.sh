@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # wfb-ng link: wfb_tx injects on one adapter, wfb_rx captures on another (same or other machine).
 #
-#   sudo ./link.sh                        both ends on this machine
-#   sudo ROLE=tx TX_IF=wlan1 ./link.sh    transmitter only (two-machine setup)
-#   sudo ROLE=rx RX_IF=wlan0 ./link.sh    receiver only
+#   sudo ./link.sh        both ends on this machine
+#   sudo ./link.sh tx     transmitter only (two-machine setup)
+#   sudo ./link.sh rx     receiver only
+#
+# In tx/rx mode, if TX_IF/RX_IF doesn't exist, the first WiFi interface is used.
 #
 # Video in:  UDP 127.0.0.1:5602  (PORT=5602 ./sender.sh)
 # Video out: UDP 127.0.0.1:5600  (./receiver.sh)
@@ -11,7 +13,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-ROLE=${ROLE:-both}          # both | tx | rx
+ROLE=${1:-${ROLE:-both}}   # both | tx | rx
 TX_IF=${TX_IF:-wlan1}       # Ralink RT5572 (good at injection)
 RX_IF=${RX_IF:-wlan0}       # Intel AX201 (receive only)
 CHANNEL=${CHANNEL:-36}
@@ -25,10 +27,15 @@ WFB=wfb-ng
 
 [[ $EUID -eq 0 ]] || { echo "run with sudo" >&2; exit 1; }
 
+# $1 if that interface exists, else the first WiFi interface on this machine.
+pick() {
+  if [[ -e /sys/class/net/$1 ]]; then echo "$1"; else iw dev | awk '/Interface/ {print $2; exit}'; fi
+}
+
 case $ROLE in
   both) ifaces=("$TX_IF" "$RX_IF") ;;
-  tx)   ifaces=("$TX_IF") ;;
-  rx)   ifaces=("$RX_IF") ;;
+  tx)   TX_IF=$(pick "$TX_IF"); ifaces=("$TX_IF") ;;
+  rx)   RX_IF=$(pick "$RX_IF"); ifaces=("$RX_IF") ;;
   *)    echo "unknown ROLE: $ROLE" >&2; exit 1 ;;
 esac
 

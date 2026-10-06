@@ -41,19 +41,19 @@ sudo ./link.sh                # terminal 1: the radio link
 PORT=5602 ./sender.sh         # terminal 3: into wfb_tx instead of straight to the receiver
 ```
 
-To split the two ends across two machines, set `ROLE` and point the interface at the adapter on that machine (check with `iw dev`). Use the same `CHANNEL` on both:
+To split the two ends across two machines, pass `tx` or `rx`. If the default interface name doesn't exist, the script uses the machine's first WiFi interface. Set `TX_IF`/`RX_IF` to choose another, and use the same `CHANNEL` on both:
 
 ```sh
 # transmitter machine
-sudo ROLE=tx TX_IF=wlan1 ./link.sh
+sudo ./link.sh tx
 PORT=5602 ./sender.sh
 
 # receiver machine
-sudo ROLE=rx RX_IF=wlan0 ./link.sh
+sudo ./link.sh rx
 ./receiver.sh
 ```
 
-Across a room, raise the transmit power, e.g. `TX_POWER=2000` (20 dBm). Press Ctrl-C in terminal 1 to hand the adapters back to NetworkManager. The keys in `keys/` come from `wfb-ng/wfb_keygen`: `drone.key` is used by the transmitter and `gs.key` by the receiver.
+Across a room, raise the transmit power: `sudo TX_POWER=2000 ./link.sh tx` (20 dBm). Press Ctrl-C in terminal 1 to hand the adapters back to NetworkManager. The keys in `keys/` come from `wfb-ng/wfb_keygen`: `drone.key` is used by the transmitter and `gs.key` by the receiver.
 
 ## Measure latency
 
