@@ -49,6 +49,7 @@ monitor() {
 
 pids=()
 restore() {
+  trap '' INT TERM
   kill "${pids[@]}" 2>/dev/null || true
   wait 2>/dev/null || true
   for i in "${ifaces[@]}"; do

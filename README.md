@@ -9,6 +9,15 @@ later:  sender.sh → :5602 → wfb_tx → WiFi ))) ((( WiFi → wfb_rx → :560
 
 The receiver listens on port 5600, where wfb_rx delivers by default. With the link in place, the sender targets port 5602 (`PORT=5602`), where `link.sh` runs `wfb_tx`. That way both ends can run on one machine without a port clash.
 
+## Quick start (two machines)
+
+```sh
+./tx.sh     # machine with the webcam + injection-capable adapter (the Ralink)
+./rx.sh     # other machine: the video window opens here
+```
+
+Each one asks for your sudo password, runs its half of the radio link and the sender or receiver, and stops it all on Ctrl-C. `rx.sh` also stops when you close the video window. The WiFi card is offline while the link runs.
+
 ## Setup
 
 ```sh
