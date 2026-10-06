@@ -17,7 +17,7 @@ cd open-ipc
 make -C wfb-ng all_bin        # needs libpcap and libsodium
 ```
 
-The `keys/` folder isn't tracked in git. Generate a key pair once with `mkdir -p keys && (cd keys && ../wfb-ng/wfb_keygen)`, then copy it to the other machine (e.g. `scp -r keys other-host:open-ipc/`). The transmitter uses `drone.key` and the receiver uses `gs.key`, so both machines must have keys from the same pair.
+`keys/` holds test keys derived from the password `change-me` (`cd keys && ../wfb-ng/wfb_keygen change-me`). The same password always gives the same pair, so every clone can talk to every other. The transmitter uses `drone.key` and the receiver uses `gs.key`. For anything beyond desk tests, generate your own pair with a real password (or none, for a random pair) and copy it to both machines. Anyone with these test keys can read and inject into the link.
 
 ## Run
 
