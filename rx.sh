@@ -28,7 +28,12 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-sudo env RX_IF="${RX_IF:-wlan0}" CHANNEL="${CHANNEL:-36}" ./link.sh rx &
+# sudo drops the caller's environment: pass on the link settings that are set (link.sh has the defaults).
+pass=()
+for v in TX_IF RX_IF CHANNEL MCS TX_POWER; do
+  if [[ -n ${!v:-} ]]; then pass+=("$v=${!v}"); fi
+done
+sudo env "${pass[@]}" ./link.sh rx &
 link=$!
 sleep 2
 ./receiver.sh &

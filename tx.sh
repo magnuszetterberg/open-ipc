@@ -14,6 +14,8 @@ sudo -v                                       # ask for the password up front
 while sleep 60; do sudo -n -v; done &         # keep sudo alive for the cleanup
 keepalive=$!
 
+TX_POWER=${TX_POWER:-2000}                    # 20 dBm, enough across a room
+
 link= app=
 cleanup() {
   trap '' INT TERM
@@ -28,7 +30,12 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-sudo env TX_POWER="${TX_POWER:-2000}" TX_IF="${TX_IF:-wlan1}" CHANNEL="${CHANNEL:-36}" ./link.sh tx &
+# sudo drops the caller's environment: pass on the link settings that are set (link.sh has the defaults).
+pass=()
+for v in TX_IF RX_IF CHANNEL MCS TX_POWER; do
+  if [[ -n ${!v:-} ]]; then pass+=("$v=${!v}"); fi
+done
+sudo env "${pass[@]}" ./link.sh tx &
 link=$!
 sleep 2
 PORT=5602 PREVIEW=1 ./sender.sh &             # preview window shows what is being sent

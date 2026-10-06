@@ -9,11 +9,11 @@ tx machine: webcam → sender.sh → :5602 → wfb_tx → WiFi ))) ((( WiFi → 
 ## Quick start (the setup that works)
 
 ```sh
-CHANNEL=6 ./tx.sh                 # XPS: sends its webcam with its Intel WiFi card
-CHANNEL=6 RX_IF=wlan1 ./rx.sh     # NUC: receives with the Ralink USB stick
+./tx.sh     # XPS: sends its webcam with its built-in Intel WiFi card (wlan0)
+./rx.sh     # NUC: receives with the Ralink USB stick (wlan1)
 ```
 
-Run both as your normal user, not with sudo; they ask for the password themselves. Each one runs its half of the radio link plus the sender or receiver. Everything stops on Ctrl-C, when you close its window, or when the radio link stops. `tx.sh` shows a preview of what is sent and `rx.sh` shows what arrives. The WiFi card is offline while the link runs. wfb-ng is fetched and built on first run.
+The defaults (channel 6, send on `wlan0`, receive on `wlan1`) match this setup. If a machine doesn't have the named interface, its first WiFi interface is used. Run both as your normal user, not with sudo; they ask for the password themselves. Each one runs its half of the radio link plus the sender or receiver. Everything stops on Ctrl-C, when you close its window, or when the radio link stops. `tx.sh` shows a preview of what is sent and `rx.sh` shows what arrives. The WiFi card is offline while the link runs. wfb-ng is fetched and built on first run.
 
 ## Results (2026-10-06)
 
@@ -45,18 +45,19 @@ Pass these as environment variables in front of `./tx.sh` / `./rx.sh`:
 
 | variable | default | meaning |
 |---|---|---|
-| `CHANNEL` | 36 | WiFi channel, must match on both ends (use 6 when an Intel card sends) |
-| `TX_IF` / `RX_IF` | wlan1 / wlan0 | WiFi interface to use; if missing, the machine's first WiFi interface |
+| `CHANNEL` | 6 | WiFi channel, must match on both ends; keep it on 2.4 GHz when an Intel card sends |
+| `TX_IF` / `RX_IF` | wlan0 / wlan1 | WiFi interface to use; if missing, the machine's first WiFi interface |
 | `TX_POWER` | 2000 | transmit power in mBm (2000 = 20 dBm); some cards ignore it |
+| `MCS` | 3 | radio data rate (HT20 MCS 3 = 26 Mbit/s) |
 
-`sender.sh` also reads `SOURCE=webcam|test`, `ENCODER=x264|vaapi`, `SIZE=1280x720`, `FPS=30`, `BITRATE=4M`, `DEVICE` and `PREVIEW=1`. `receiver.sh` reads `PLAYER=auto|gst|ffplay`. The GStreamer receiver needs gst-plugins-base and gst-plugins-good; without them it falls back to ffplay.
+`sender.sh` also reads `SOURCE=webcam|test`, `ENCODER=x264|vaapi`, `SIZE=1280x720`, `FPS=30`, `BITRATE=4M`, `DEVICE` and `PREVIEW=1`. `receiver.sh` reads `PLAYER=auto|gst|ffplay`. The GStreamer receiver needs gst-plugins-base, -good, -bad and gst-libav; if any are missing, it falls back to ffplay.
 
 ## Pieces
 
 | script | does |
 |---|---|
 | `tx.sh` / `rx.sh` | one command per machine (link + sender/receiver) |
-| `link.sh [tx\|rx]` | puts the card in monitor mode and runs `wfb_tx` / `wfb_rx` (needs sudo); with no argument, runs both ends on one machine with two cards |
+| `link.sh [tx\|rx]` | puts the card in monitor mode and runs `wfb_tx` / `wfb_rx` (needs sudo); with no argument, runs both ends on one machine with two cards (untested: on the NUC that means Intel sending, Ralink receiving) |
 | `sender.sh` | webcam or test pattern → H.264 → RTP; burns a `TX hh:mm:ss.mmm` timestamp into each frame |
 | `receiver.sh` | RTP → low-latency video window |
 | `build.sh` | fetches and builds wfb-ng if needed |

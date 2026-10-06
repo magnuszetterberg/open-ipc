@@ -9,18 +9,18 @@
 #
 # Video in:  UDP 127.0.0.1:5602  (PORT=5602 ./sender.sh)
 # Video out: UDP 127.0.0.1:5600  (./receiver.sh)
-# Ctrl-C hands both adapters back to NetworkManager.
+# Ctrl-C hands the adapter(s) back to NetworkManager.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 ROLE=${1:-${ROLE:-both}}   # both | tx | rx
-TX_IF=${TX_IF:-wlan1}       # Ralink RT5572 (good at injection)
-RX_IF=${RX_IF:-wlan0}       # Intel AX201 (receive only)
-CHANNEL=${CHANNEL:-36}
+TX_IF=${TX_IF:-wlan0}       # built-in Intel card: can send (tested on 2.4 GHz), can't receive
+RX_IF=${RX_IF:-wlan1}       # Ralink RT5572 USB stick: receives well
+CHANNEL=${CHANNEL:-6}       # 2.4 GHz: Intel cards won't transmit on 5 GHz channel 36 ("No IR")
 MCS=${MCS:-3}               # HT20 MCS3 = 26 Mbit/s on air
 FEC_K=${FEC_K:-8}           # 8 data packets ...
 FEC_N=${FEC_N:-12}          # ... + 4 parity per block
-TX_POWER=${TX_POWER:-500}   # mBm (5 dBm); the adapters sit next to each other
+TX_POWER=${TX_POWER:-500}   # mBm; 5 dBm suits both ends on one machine (tx.sh uses 20 dBm)
 IN_PORT=${IN_PORT:-5602}
 OUT_PORT=${OUT_PORT:-5600}
 WFB=wfb-ng

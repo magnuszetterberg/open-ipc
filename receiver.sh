@@ -2,7 +2,7 @@
 # RTP/UDP H.264 -> screen, tuned for low latency.
 # Listens where wfb_rx delivers by default (port 5600).
 #
-#   ./receiver.sh                 GStreamer if installed, else ffplay
+#   ./receiver.sh                 GStreamer if all its plugins are installed, else ffplay
 #   PLAYER=ffplay ./receiver.sh
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -11,10 +11,10 @@ PORT=${PORT:-5600}
 PLAYER=${PLAYER:-auto}    # auto | gst | ffplay
 
 if [[ $PLAYER == auto ]]; then
-  PLAYER=ffplay
-  if gst-inspect-1.0 udpsrc &>/dev/null && gst-inspect-1.0 videoconvert &>/dev/null; then
-    PLAYER=gst
-  fi
+  PLAYER=gst
+  for el in udpsrc rtph264depay h264parse avdec_h264 videoconvert autovideosink; do
+    gst-inspect-1.0 "$el" &>/dev/null || { PLAYER=ffplay; break; }
+  done
 fi
 
 case $PLAYER in

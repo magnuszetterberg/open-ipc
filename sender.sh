@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Webcam (or test pattern) -> H.264 -> RTP/UDP.
-# The default target 127.0.0.1:5600 is also where wfb_tx listens, so the same
-# command works unchanged once a wfb-ng link is in the middle.
+# The default target 127.0.0.1:5600 goes straight to receiver.sh on this machine.
+# With the wfb-ng link in between, send to link.sh's input with PORT=5602 (tx.sh does this).
 #
 #   ./sender.sh                      webcam, 720p30, x264
 #   SOURCE=test ./sender.sh          test pattern, no camera latency
-#   ENCODER=vaapi ./sender.sh        Intel hardware encoder
+#   ENCODER=vaapi ./sender.sh        VA-API hardware encoder (e.g. Intel graphics)
 #   HOST=192.168.1.20 ./sender.sh    send to another machine
 #   PREVIEW=1 ./sender.sh            also show the frames before encoding (closing it stops the sender)
 set -euo pipefail
