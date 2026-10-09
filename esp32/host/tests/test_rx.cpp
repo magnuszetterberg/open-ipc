@@ -64,11 +64,12 @@ static std::vector<std::string> expected(int count)
 
 // Send `count` payloads through tx -> air -> rx. Returns what rx delivered.
 static std::vector<std::string> run(int count, std::function<bool(int)> drop, wfb_rx_stats *stats = nullptr,
-                                    uint32_t tx_channel = 0, const uint8_t *rx_key = gs_key)
+                                    uint32_t tx_channel = 0, const uint8_t *rx_key = gs_key, int ring_size = 8)
 {
     payload_list out;
     wfb_rx rx(out);
     wfb_rx_config rx_config;
+    rx_config.ring_size = ring_size;
     CHECK(rx.init(rx_key, 64, rx_config) == WFB_OK);
 
     air link(rx, drop);
@@ -124,6 +125,14 @@ int main()
     memcpy(other_key + 32, gs_key + 32, 32);              // ...next to our drone's public key
     CHECK(run(count, [](int) { return false; }, &stats, 0, other_key).empty());
     CHECK(stats.count_p_dec_err > 0 && stats.count_p_outgoing == 0);
+
+    // A ring of one block (what fits three cameras on an ESP32 without PSRAM): on a radio that delivers
+    // in order, FEC still recovers up to n - k lost frames per block.
+    CHECK(run(count, [](int) { return false; }, &stats, 0, gs_key, 1) == expected(count));
+    CHECK(run(count, [](int f) { return f % 12 < 4; }, &stats, 0, gs_key, 1) == expected(count));
+    CHECK(stats.count_p_fec_recovered > 0 && stats.count_p_lost == 0 && stats.count_p_override == 0);
+    CHECK(run(count, [](int f) { return f % 12 == 1 || f % 12 == 6 || f % 12 == 9 || f % 12 == 11; }, &stats, 0,
+              gs_key, 1) == expected(count));
 
     return check_result("test_rx");
 }
