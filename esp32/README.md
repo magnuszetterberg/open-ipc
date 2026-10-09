@@ -58,10 +58,22 @@ The core components build for Linux too (R4), against the system libsodium, usin
 | `test_tx` | our transmitter's packet sequence; the ground key opens what it sends |
 | `test_rx` | our transmitter into our receiver, with and without loss; wrong channel or key gets nothing |
 | `test_wfb_ng` | our transmitter into the real `wfb_rx`, and the real `wfb_tx` into our receiver |
+| `test_80211` | the 802.11 header: the address bytes `wfb_rx` filters on, the sequence number |
+| `test_rtp_jpeg` | RTP/JPEG: which JPEGs are accepted, packet layout, round trip, loss, GStreamer decoding our packets |
+
+## Camera video (M2)
+
+The camera firmware sends the OV2640's JPEG frames as RTP/JPEG (RFC 2435) over wfb-ng: 640x480 at about 25 fps and 10 KB a frame, about 2 Mbit/s. On the NUC:
+
+```sh
+VIDEO=jpeg ./rx.sh
+```
+
+The video window opens with the first frame. `esp32/monitor.sh` shows the ESP32's side once a second: `video: 25 fps, 10 KB/frame, 200 packets/s, 300 frames/s on air, 0 dropped by WiFi`. Frame size, JPEG quality and whether each frame finishes its FEC block are in `idf.py menuconfig` under "Camera".
 
 ## On-air test (M1)
 
-The camera firmware sends a counter over wfb-ng: 100 payloads of 1000 bytes a second, on channel 6 at HT20 MCS 3, link 0, port 0, FEC 8/12, with `keys/drone.key`. Those are the receiver's defaults in `link.sh`, so the NUC needs no changes. The settings are in `idf.py menuconfig` under "wfb-ng link" (R8).
+Set "What to send" to "Counter" in `idf.py menuconfig` ("wfb-ng link"). The camera firmware then sends a counter over wfb-ng instead of video: 100 payloads of 1000 bytes a second, on channel 6 at HT20 MCS 3, link 0, port 0, FEC 8/12, with `keys/drone.key`. Those are the receiver's defaults in `link.sh`, so the NUC needs no changes. The settings are in `idf.py menuconfig` under "wfb-ng link" (R8).
 
 1. Flash it: `esp32/build.sh camera flash`, then watch `esp32/monitor.sh`. Each second it prints a line like `counter 402: 100 payloads/s, 153 frames/s, 0 dropped by WiFi`.
 2. On the NUC, either:
@@ -84,6 +96,8 @@ Keep the ESP32 a metre or more from the Ralink stick: at 20 dBm, centimetres can
 | `idf.sh`, `idf-env.sh` | run a command with ESP-IDF set up; the pin |
 | `components/radio/` | raw 802.11 transmit with `esp_wifi_80211_tx()` |
 | `components/keys/` | embeds the link key at build time (R9) |
+| `components/cam/` | OV2640 JPEG capture, AI-Thinker pin map |
+| `components/rtp_jpeg/` | JPEG frames as RTP packets (RFC 2435) and back |
 | `tools/counter_check.py` | checks the M1 counter stream on the receiver |
 
 `base/` arrives with M4.
