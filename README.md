@@ -50,7 +50,7 @@ Pass these as environment variables in front of `./tx.sh` / `./rx.sh`:
 | `TX_POWER` | 2000 | transmit power in mBm (2000 = 20 dBm); some cards ignore it |
 | `MCS` | 3 | radio data rate (HT20 MCS 3 = 26 Mbit/s) |
 
-`sender.sh` also reads `SOURCE=webcam|test`, `ENCODER=x264|vaapi`, `SIZE=1280x720`, `FPS=30`, `BITRATE=4M`, `DEVICE` and `PREVIEW=1`. `receiver.sh` reads `PLAYER=auto|gst|ffplay`. The GStreamer receiver needs gst-plugins-base, -good, -bad and gst-libav; if any are missing, it falls back to ffplay.
+`sender.sh` also reads `SOURCE=webcam|test`, `ENCODER=x264|vaapi`, `SIZE=1280x720`, `FPS=30`, `BITRATE=4M`, `DEVICE` and `PREVIEW=1`. `receiver.sh` reads `PLAYER=auto|gst|ffplay` and `VIDEO=h264|jpeg` (`jpeg` for the ESP32-CAM's RTP/JPEG; `VIDEO=jpeg ./rx.sh` passes it on). The GStreamer receiver needs gst-plugins-base, -good, -bad and gst-libav; if any are missing, it falls back to ffplay.
 
 ## Pieces
 
