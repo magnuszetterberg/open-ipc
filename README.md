@@ -39,7 +39,26 @@ What the camera sends at each setting (JPEG quality 12, MCS 3, FEC 8/12; measure
 | 640x480 | 25 | 12 | 226 | 604 | 340 |
 | 800x600 | 25 | 18 | 326 | 598 | 484 |
 
-Loss and latency at each setting, on the receiving side, aren't measured yet (#15).
+What a second ESP32-CAM (running `esp32/base`) received, on the same desk, with both boards' antennas as they are (#23), 2026-10-09. Each row averages 11 s. "Heard" is the share of frames on air that reached the receiver; "lost" is packets FEC couldn't repair, per second and as a share of the RTP packets sent.
+
+| setting | RSSI | heard | received fps (of sent) | lost |
+|---|---|---|---|---|
+| 640x480, MCS 3, FEC 8/12, block finished per frame | -81 dBm | 94% | 24.5 of 25 | 6/s (3%) |
+| 640x480, MCS 3, FEC 8/12 | -81 dBm | 89% | 24.5 of 25 | 9/s (5%) |
+| 640x480, MCS 1, FEC 8/12 | -83 dBm | 89% | 24.7 of 25 | 3/s (2%) |
+| 640x480, MCS 3, FEC 6/12 | -83 dBm | 80% | 24.8 of 25 | 7/s (3%) |
+| 320x240, MCS 3, FEC 8/12 | -84 dBm | 22-41% | 15-22 of 50 | most |
+| 800x600, MCS 3, FEC 8/12 | -85 dBm | 13-21% | 4 of 25 | most |
+| 640x480, MCS 5 | -83 dBm | nothing received | | |
+
+How far to trust it: the link was marginal and drifted. RSSI moved between -81 and -90 dBm over half an hour with nothing changed in the firmware, and by the end the receiver heard almost nothing at any setting. So the rows compare only roughly. What holds:
+
+- At about -81 dBm, 640x480 at 25 fps gets through with a few percent of packets lost after FEC.
+- MCS 5 needs a stronger signal than these boards manage; MCS 1 copes best when the signal is weak.
+- More FEC (6/12) repairs more but puts a third more frames on air for the same video.
+- The rest is set by the antennas: the NUC's Ralink stick hears the same camera at -54 dBm, the second ESP32-CAM at -81 to -90 dBm.
+
+Latency is not measured yet: it needs the clock-photo method (Measure latency, below).
 
 An earlier run lost 10-20% of frames at -74 dBm; a scan from the ESP32-CAM heard the home router 28 dB weaker than the NUC did, which points at the board's antenna (#23).
 
