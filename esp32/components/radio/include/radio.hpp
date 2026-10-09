@@ -1,4 +1,4 @@
-// Raw 802.11 transmit for wfb-ng on the ESP32 (platform layer, R4).
+// Raw 802.11 transmit and receive for wfb-ng on the ESP32 (platform layer, R4).
 #pragma once
 
 #include <stddef.h>
@@ -6,6 +6,8 @@
 
 #include "esp_err.h"
 #include "esp_wifi_types.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "wfb_80211.hpp"
 #include "wfb_core.hpp"
 
@@ -34,4 +36,37 @@ public:
 private:
     wfb_80211_framer framer;
     uint8_t frame[1500];     // esp_wifi_80211_tx()'s limit
+};
+
+// One received wfb-ng packet: the 802.11 header and FCS are already stripped.
+struct radio_frame
+{
+    uint32_t channel_id;  // (link_id << 8) + radio_port, from the second address
+    int8_t rssi;          // dBm
+    uint16_t size;
+    uint8_t data[1500];
+};
+
+// Receives wfb-ng frames in promiscuous mode (R5). The WiFi driver's callback only checks and copies;
+// the frames are handed over through a queue, to be decrypted and decoded in the caller's task.
+// One instance: the driver's callback has no context pointer. Call radio_start() first.
+class radio_rx
+{
+public:
+    // slots: frames that can wait at once; allocated here, nothing later (Coding conventions).
+    esp_err_t start(int slots);
+
+    // The next frame, or nullptr after timeout. Hand it back with release() once processed.
+    radio_frame *receive(TickType_t timeout);
+    void release(radio_frame *frame);
+
+    // Written by the WiFi driver's task, read by anyone: counts only, so no locking.
+    volatile uint32_t heard = 0;     // data frames with a good FCS
+    volatile uint32_t accepted = 0;  // wfb-ng frames queued
+    volatile uint32_t overflow = 0;  // wfb-ng frames dropped: every slot was waiting
+    volatile uint32_t bad = 0;       // frames received with errors
+
+private:
+    static void callback(void *buf, wifi_promiscuous_pkt_type_t type);
+    QueueHandle_t free_slots = nullptr, full_slots = nullptr;
 };

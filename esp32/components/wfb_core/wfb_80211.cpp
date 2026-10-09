@@ -7,7 +7,8 @@
 // even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
 // Public License for more details: wfb-ng/LICENSE.txt, or <https://www.gnu.org/licenses/>.
 //
-// Adapted from RawSocketTransmitter::inject_packet in wfb-ng/src/tx.cpp at submodule commit
+// Adapted from RawSocketTransmitter::inject_packet in wfb-ng/src/tx.cpp and the capture filter and
+// Receiver::loop_iter in rx.cpp at submodule commit
 // 59adeac09a35f416b396f06da7963dedc8fa3920 (R3). See wfb_80211.hpp.
 #include "wfb_80211.hpp"
 
@@ -47,4 +48,24 @@ size_t wfb_80211_framer::frame(uint8_t *out, size_t out_size, const uint8_t *pac
 
     memcpy(out + sizeof(header), packet, packet_size);
     return sizeof(header) + packet_size;
+}
+
+bool wfb_80211_unframe(const uint8_t *frame, size_t frame_size, uint32_t *channel_id, const uint8_t **packet,
+                       size_t *packet_size)
+{
+    if (frame_size <= sizeof(ieee80211_header))
+    {
+        return false;  // "Short packet (ieee header)" in rx.cpp
+    }
+    // "ether[0x0a:2]==0x5742": the second address starts with W:B
+    if (frame[0] != FRAME_TYPE_DATA || frame[SRC_MAC_THIRD_BYTE - 2] != 0x57 || frame[SRC_MAC_THIRD_BYTE - 1] != 0x42)
+    {
+        return false;
+    }
+    uint32_t channel_id_be;
+    memcpy(&channel_id_be, frame + SRC_MAC_THIRD_BYTE, sizeof(channel_id_be));
+    *channel_id = be32toh(channel_id_be);
+    *packet = frame + sizeof(ieee80211_header);
+    *packet_size = frame_size - sizeof(ieee80211_header);
+    return true;
 }
