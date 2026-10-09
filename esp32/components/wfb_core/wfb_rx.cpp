@@ -1,3 +1,12 @@
+// Copyright (C) 2017 - 2026 Vasily Evseenko <svpcom@p2ptech.org>
+// Adaptation for the ESP32: Copyright (C) 2026 Magnus Zetterberg
+//
+// This program is free software; you can redistribute it and/or modify it under the terms of the
+// GNU General Public License as published by the Free Software Foundation; version 3.
+// This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+// even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
+// Public License for more details: wfb-ng/LICENSE.txt, or <https://www.gnu.org/licenses/>.
+//
 // Adapted from wfb-ng/src/rx.cpp (class Aggregator) at submodule commit
 // 59adeac09a35f416b396f06da7963dedc8fa3920 (R3). See wfb_rx.hpp for what changed and why.
 #include "wfb_rx.hpp"

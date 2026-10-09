@@ -19,6 +19,7 @@ endfunction()
 host_test(test_fec wfb_core)
 host_test(test_tx wfb_core)
 host_test(test_rx wfb_core)
+host_test(test_80211 wfb_core)
 
 # Runs the real wfb_tx and wfb_rx from the submodule; test.sh builds them first.
 host_test(test_wfb_ng wfb_core)
