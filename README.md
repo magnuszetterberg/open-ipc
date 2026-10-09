@@ -61,6 +61,8 @@ Pass these as environment variables in front of `./tx.sh` / `./rx.sh`:
 | `TX_POWER` | 2000 | transmit power in mBm (2000 = 20 dBm); some cards ignore it |
 | `MCS` | 3 | radio data rate (HT20 MCS 3 = 26 Mbit/s) |
 
+`link.sh rx` also receives an ESP32-CAM's telemetry stream (radio port 16) and delivers it to UDP 5610, and keeps the video receiver's latest signal stats in `/tmp/open-ipc-rx.stats`. To burn them into the video: `sudo ./link.sh rx` in one terminal, then `./burnin.sh rtmp://<server>/<app>/<name>` (or a file name, or nothing for a window) instead of `receiver.sh`. `burnin.sh` reads `FPS=25`, `BITRATE=2M`, `PORT`, `TELEMETRY_PORT`, `STATS_FILE`, and `VIDEO_IN=rtsp://...` for the base station's streams.
+
 `sender.sh` also reads `SOURCE=webcam|test`, `ENCODER=x264|vaapi`, `SIZE=1280x720`, `FPS=30`, `BITRATE=4M`, `DEVICE` and `PREVIEW=1`. `receiver.sh` reads `PLAYER=auto|gst|ffplay` and `VIDEO=h264|jpeg` (`jpeg` for the ESP32-CAM's RTP/JPEG; `VIDEO=jpeg ./rx.sh` passes it on). The GStreamer receiver needs gst-plugins-base, -good, -bad and gst-libav; if any are missing, it falls back to ffplay.
 
 ## Pieces
@@ -71,6 +73,8 @@ Pass these as environment variables in front of `./tx.sh` / `./rx.sh`:
 | `link.sh [tx\|rx]` | puts the card in monitor mode and runs `wfb_tx` / `wfb_rx` (needs sudo); with no argument, runs both ends on one machine with two cards (untested: on the NUC that means Intel sending, Ralink receiving) |
 | `sender.sh` | webcam or test pattern → H.264 → RTP; burns a `TX hh:mm:ss.mmm` timestamp into each frame |
 | `receiver.sh` | RTP → low-latency video window |
+| `burnin.sh` | ESP32-CAM video with its telemetry and signal quality burned in, as H.264: to RTMP, a file, or a window |
+| `telemetry_overlay.py` | keeps the overlay text for `burnin.sh`: telemetry from UDP 5610, signal from `link.sh`'s stats file |
 | `build.sh` | fetches and builds wfb-ng if needed |
 | `sniff.sh [iface]` | counts what a card hears in monitor mode on channel 36 (wfb-ng) and 128 (a router, as a control) |
 | `clock.html` | millisecond clock for latency photos |
