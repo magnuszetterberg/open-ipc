@@ -31,6 +31,16 @@ The defaults (channel 6, send on `wlan0`, receive on `wlan1`) match this setup. 
 | **Link** | about 1 m apart: RSSI -54 dBm, ~295 of ~300 frames/s received, 0-5/s repaired by FEC, none lost |
 | **Latency** | not measured yet; it looks acceptable by eye. The clock-photo measurement is part of M3 (#15). |
 
+What the camera sends at each setting (JPEG quality 12, MCS 3, FEC 8/12; measured on the ESP32-CAM, #15):
+
+| frame size | fps | KB/frame | RTP packets/s | frames on air/s, FEC block finished per frame | not finished |
+|---|---|---|---|---|---|
+| 320x240 | 50 | 4 | 200 | 599 | 298 |
+| 640x480 | 25 | 12 | 226 | 604 | 340 |
+| 800x600 | 25 | 18 | 326 | 598 | 484 |
+
+Loss and latency at each setting, on the receiving side, aren't measured yet (#15).
+
 An earlier run lost 10-20% of frames at -74 dBm; a scan from the ESP32-CAM heard the home router 28 dB weaker than the NUC did, which points at the board's antenna (#23).
 
 What we learned about the hardware:

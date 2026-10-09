@@ -113,9 +113,12 @@ menu "Camera"
         bool "Finish the FEC block at the end of each frame"
         default y
         help
-            A 640x480 frame is about 7 packets, an FEC block 8. Finishing the block after each frame
-            (padding it, as wfb_tx's FEC timeout does) lets the receiver recover a lost packet at once,
-            instead of when the next frame completes the block 40 ms later. Costs about 14% airtime.
+            A frame rarely fills a whole number of FEC blocks (8 packets). Finishing the block after each
+            frame (padding it, as wfb_tx's FEC timeout does) lets the receiver recover a lost packet at once,
+            instead of when the next frame completes the block, up to one frame interval later.
+            Measured (#15): it roughly doubles the frames on air, about 600/s instead of 300-340 at
+            320x240 and 640x480. The padding frames are tiny, so airtime grows about a quarter, but the
+            receiver's packet rate doubles.
 
     config CAMERA_JPEG_QUALITY
         int "JPEG quality (lower is better and bigger)"
