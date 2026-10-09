@@ -16,3 +16,5 @@ function(host_test name)
 endfunction()
 
 host_test(test_fec wfb_core)
+host_test(test_tx wfb_core)
+target_compile_definitions(test_tx PRIVATE KEYS_DIR="${CMAKE_CURRENT_LIST_DIR}/../../keys")
