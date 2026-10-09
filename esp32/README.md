@@ -71,6 +71,19 @@ VIDEO=jpeg ./rx.sh
 
 The video window opens with the first frame. `esp32/monitor.sh` shows the ESP32's side once a second: `video: 25 fps, 10 KB/frame, 200 packets/s, 300 frames/s on air, 0 dropped by WiFi`. Frame size, JPEG quality and whether each frame finishes its FEC block are in `idf.py menuconfig` under "Camera".
 
+## Base station (M4)
+
+`base/` is the base-station firmware for the Olimex ESP32-POE: it receives a camera's wfb-ng frames in promiscuous mode, decodes them with the same core as the NUC (`wfb_rx`), and sends the video over Ethernet as UDP, so `VIDEO=jpeg ./receiver.sh` on another machine plays it. Set the destination in `idf.py -C base menuconfig` under "Ethernet out" (left empty in the repo; it's your network's address). Without it, or without a cable, it receives and reports only.
+
+```sh
+ESPPORT=/dev/ttyUSB1 esp32/build.sh base flash
+esp32/monitor.sh /dev/ttyUSB1
+```
+
+Once a second it prints what came through: frames and RSSI, wfb_rx's counters (`data`, `dec_err`, `fec_rec`, `lost`, `out`), the video's fps and bitrate, and what went out over Ethernet.
+
+On the original ESP32, generating the Ethernet clock (as the ESP32-POE does) can be unstable while WiFi runs (ESP32 errata). The stats line counts Ethernet link drops to show it (#18).
+
 ## On-air test (M1)
 
 Set "What to send" to "Counter" in `idf.py menuconfig` ("wfb-ng link"). The camera firmware then sends a counter over wfb-ng instead of video: 100 payloads of 1000 bytes a second, on channel 6 at HT20 MCS 3, link 0, port 0, FEC 8/12, with `keys/drone.key`. Those are the receiver's defaults in `link.sh`, so the NUC needs no changes. The settings are in `idf.py menuconfig` under "wfb-ng link" (R8).
@@ -98,6 +111,7 @@ Keep the ESP32 a metre or more from the Ralink stick: at 20 dBm, centimetres can
 | `components/keys/` | embeds the link key at build time (R9) |
 | `components/cam/` | OV2640 JPEG capture, AI-Thinker pin map |
 | `components/rtp_jpeg/` | JPEG frames as RTP packets (RFC 2435) and back |
+| `components/eth/` | Ethernet on the Olimex ESP32-POE (LAN8720), and UDP out |
+| `base/` | base-station firmware (ESP-IDF project) |
 | `tools/counter_check.py` | checks the M1 counter stream on the receiver |
 
-`base/` arrives with M4.

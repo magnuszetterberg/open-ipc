@@ -1,0 +1,4 @@
+# Base station: any classic ESP32. No PSRAM assumed: most Ethernet ESP32 boards have none.
+CONFIG_IDF_TARGET="esp32"
+# The ground side of the link uses gs.key (R9)
+CONFIG_WFB_KEY_FILE="keys/gs.key"
