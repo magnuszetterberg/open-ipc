@@ -1,3 +1,12 @@
+// Copyright (C) 2017 - 2026 Vasily Evseenko <svpcom@p2ptech.org>
+// Adaptation for the ESP32: Copyright (C) 2026 Magnus Zetterberg
+//
+// This program is free software; you can redistribute it and/or modify it under the terms of the
+// GNU General Public License as published by the Free Software Foundation; version 3.
+// This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+// even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
+// Public License for more details: wfb-ng/LICENSE.txt, or <https://www.gnu.org/licenses/>.
+//
 // wfb-ng receive core: session decryption, packet decryption, FEC recovery (core layer, R4).
 //
 // Adapted from class Aggregator in wfb-ng/src/rx.hpp and rx.cpp, at submodule commit
