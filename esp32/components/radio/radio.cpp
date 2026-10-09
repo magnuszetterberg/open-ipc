@@ -76,8 +76,10 @@ esp_err_t radio_rx::start(int slots)
     }
     for (int i = 0; i < slots; i++)
     {
-        // internal RAM: the driver's callback copies into these, and must not wait on PSRAM
-        radio_frame *f = static_cast<radio_frame *>(heap_caps_malloc(sizeof(radio_frame), MALLOC_CAP_INTERNAL));
+        // Internal RAM, so the driver's callback doesn't wait on PSRAM; and byte-addressable: on the
+        // ESP32, MALLOC_CAP_INTERNAL alone may hand out instruction RAM, where byte writes fault.
+        radio_frame *f = static_cast<radio_frame *>(
+            heap_caps_malloc(sizeof(radio_frame), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
         if (f == nullptr)
         {
             return ESP_ERR_NO_MEM;
