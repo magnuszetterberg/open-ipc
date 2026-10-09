@@ -27,6 +27,16 @@ protected:
     ~wfb_sink() = default;
 };
 
+// Where the receiver hands recovered payloads (R5): an RTP stream, a socket, a test's list.
+class wfb_payload_sink
+{
+public:
+    virtual void send_payload(const uint8_t *buf, size_t size) = 0;
+
+protected:
+    ~wfb_payload_sink() = default;
+};
+
 // The largest packet handed to a sink: the ESP32 sends at most 1500 bytes per frame
 // (esp_wifi_80211_tx), and the 802.11 header takes 24 of them (protocol table).
 static const size_t WFB_MAX_PACKET = 1500 - 24;
