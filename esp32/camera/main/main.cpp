@@ -1,5 +1,6 @@
-// Camera firmware (app layer, R4): camera -> RTP/JPEG -> wfb-ng -> radio. Or, for testing the link
-// itself, a numbered counter instead of video (Kconfig: "What to send").
+// Camera firmware (app layer, R4): camera -> RTP/JPEG -> wfb-ng -> radio, and telemetry on its own
+// wfb-ng stream. Or, for testing the link itself, a numbered counter instead of video (Kconfig:
+// "What to send").
 #include <stdio.h>
 #include <string.h>
 
@@ -7,6 +8,7 @@
 #include "esp_log.h"
 #include "esp_psram.h"
 #include "esp_timer.h"
+#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "keys.hpp"
@@ -29,6 +31,9 @@ struct link
     wfb_tx *tx;
     radio_tx *radio;
 };
+
+// What the telemetry reports from the video task: written once a second there, read by the telemetry task.
+static volatile uint32_t video_fps = 0, video_frame_bytes = 0;
 
 // Radio counters since the last stats line.
 struct radio_delta
@@ -115,6 +120,8 @@ static void video_task(void *arg)
                      (unsigned long)sink.packets, (unsigned long)frames_s, (unsigned long)dropped_s,
                      (unsigned long)sink.errors, (unsigned long)refused, refused ? ": " : "",
                      refused ? rtp_jpeg_status_name(last_refusal) : "");
+            video_fps = frames;
+            video_frame_bytes = frames ? bytes / frames : 0;
             frames = bytes = refused = 0;
             sink.packets = sink.errors = 0;
         }
@@ -172,6 +179,44 @@ static void counter_task(void *arg)
 
 #endif
 
+#if CONFIG_LINK_TELEMETRY
+
+// One JSON object per message (docs/DESIGN.md: Telemetry). Signal quality isn't here: it is measured
+// where the link is received.
+static void telemetry_task(void *arg)
+{
+    wfb_tx *tx = static_cast<wfb_tx *>(arg);
+    char msg[256];
+    uint32_t seq = 0, sent = 0, errors = 0;
+    TickType_t wake = xTaskGetTickCount();
+    for (;;)
+    {
+        vTaskDelayUntil(&wake, pdMS_TO_TICKS(CONFIG_LINK_TELEMETRY_INTERVAL_MS));
+        uint64_t now = esp_timer_get_time();
+        int8_t power = 0;
+        esp_wifi_get_max_tx_power(&power);
+        int n = snprintf(msg, sizeof(msg),
+                         "{\"cam\":%d,\"seq\":%lu,\"uptime_s\":%llu,\"fps\":%lu,\"frame_kb\":%.1f,"
+                         "\"tx_dbm\":%.2f,\"temp_c\":null}",
+                         CONFIG_LINK_RADIO_PORT, (unsigned long)seq++, (unsigned long long)(now / 1000000),
+                         (unsigned long)video_fps, video_frame_bytes / 1024.0, power / 4.0);
+        if (tx->send((const uint8_t *)msg, (size_t)n, now) == WFB_OK)
+        {
+            sent += 1;
+        }
+        else
+        {
+            errors += 1;
+        }
+        if (seq % 10 == 0)
+        {
+            ESP_LOGI(TAG, "telemetry: %lu sent, %lu errors: %s", (unsigned long)sent, (unsigned long)errors, msg);
+        }
+    }
+}
+
+#endif
+
 extern "C" void app_main(void)
 {
     esp_chip_info_t chip;
@@ -218,6 +263,27 @@ extern "C" void app_main(void)
     }
     ESP_LOGI(TAG, "wfb-ng link 0x%06x port %d, FEC %d/%d, max payload %u", CONFIG_LINK_ID, CONFIG_LINK_RADIO_PORT,
              CONFIG_LINK_FEC_K, CONFIG_LINK_FEC_N, (unsigned)tx.max_payload());
+
+#if CONFIG_LINK_TELEMETRY
+    // Its own stream (radio port, FEC 1/2) on the same radio: each message goes out at once
+    const uint32_t telemetry_id = ((uint32_t)CONFIG_LINK_ID << 8) + CONFIG_LINK_TELEMETRY_PORT;
+    static radio_tx telemetry_radio(telemetry_id);
+    static wfb_tx telemetry(telemetry_radio);
+    wfb_tx_config telemetry_cfg;
+    telemetry_cfg.fec_k = 1;
+    telemetry_cfg.fec_n = 2;
+    telemetry_cfg.channel_id = telemetry_id;
+    rc = telemetry.init(key, key_size, telemetry_cfg);
+    if (rc == WFB_OK)
+    {
+        xTaskCreatePinnedToCore(telemetry_task, "telemetry", 4096, &telemetry, 4, nullptr, 1);
+        ESP_LOGI(TAG, "telemetry on port %d every %d ms", CONFIG_LINK_TELEMETRY_PORT, CONFIG_LINK_TELEMETRY_INTERVAL_MS);
+    }
+    else
+    {
+        ESP_LOGE(TAG, "telemetry init: %s", wfb_status_name(rc));
+    }
+#endif
 
     static link l = {&tx, &radio};
 #if CONFIG_LINK_PAYLOAD_VIDEO
