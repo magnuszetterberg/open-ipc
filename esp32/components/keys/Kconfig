@@ -1,0 +1,12 @@
+menu "Link key"
+
+    config WFB_KEY_FILE
+        string "Key file, relative to the repo root"
+        default "keys/drone.key"
+        help
+            A wfb_keygen key file of 64 bytes. The camera uses drone.key and the base station gs.key.
+            The default is the repo's test key from the password "change-me": anyone with the repo
+            can read and inject into the link. Point this at your own keys for anything beyond
+            desk tests, and keep them out of git.
+
+endmenu

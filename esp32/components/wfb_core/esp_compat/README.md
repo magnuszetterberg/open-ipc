@@ -1,0 +1,1 @@
+Stand-ins for Linux headers that `wfb-ng/src/wifibroadcast.hpp` includes but ESP-IDF doesn't have. The header uses none of what they declare on Linux; it only needs them to exist, plus `INADDR_ANY` and `SOCK_DGRAM` for two default arguments. Only the ESP32 build puts this directory on the include path, so the submodule stays unedited (R2).
