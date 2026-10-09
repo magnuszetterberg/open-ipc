@@ -22,6 +22,17 @@ The defaults (channel 6, send on `wlan0`, receive on `wlan1`) match this setup. 
 | **Working link** | XPS 13 (Intel WiFi) sending on 2.4 GHz channel 6 → NUC with a Ralink RT5572 USB stick receiving |
 | **Latency** | about **35 ms** (20–52 ms over 4 photos), from the XPS preview to the NUC window. That covers encoding, radio, decoding and display, but not the webcam's own delay. The XPS preview lags slightly behind the real send moment, so the true figure is a little higher. |
 
+## Results: ESP32-CAM (2026-10-09)
+
+| | |
+|---|---|
+| **Working link** | AI-Thinker ESP32-CAM (firmware in `esp32/`) sending 640x480 RTP/JPEG on channel 6, HT20 MCS 3 → the same NUC and Ralink stick, unmodified `wfb_rx`, `VIDEO=jpeg ./rx.sh` |
+| **Video** | 25 fps, about 10 KB a frame: 175 RTP packets/s, about 1.9 Mbit/s delivered |
+| **Link** | about 1 m apart: RSSI -54 dBm, ~295 of ~300 frames/s received, 0-5/s repaired by FEC, none lost |
+| **Latency** | not measured yet; it looks acceptable by eye. The clock-photo measurement is part of M3 (#15). |
+
+An earlier run lost 10-20% of frames at -74 dBm; a scan from the ESP32-CAM heard the home router 28 dB weaker than the NUC did, which points at the board's antenna (#23).
+
 What we learned about the hardware:
 
 - **Intel cards can send but can't receive.** The NUC's Intel AX201 captured nothing in monitor mode, not even beacons from the home router (`sniff.sh` showed 0 frames). The XPS's Intel card also got 0 packets as a receiver. Sending from the XPS's Intel card works.
