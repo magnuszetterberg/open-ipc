@@ -1,6 +1,8 @@
 """Serial monitor that stays open: it lets go of the port while build.sh flashes, then reconnects.
 
-Run it through monitor.sh. After each flash it resets the board, so the whole boot log shows.
+Run it through monitor.sh. Connecting restarts the board, so the whole boot log shows: on Linux,
+opening a serial port switches DTR and RTS on, and on the ESP32-CAM-MB that holds the ESP32 in reset,
+so the monitor switches both off again, which starts it. The same happens after each flash.
 If the board is unplugged it waits and reconnects when it comes back. Ctrl-C quits.
 
 The handshake with build.sh: build.sh creates REQUEST, then takes LOCK exclusively. The monitor
@@ -26,16 +28,12 @@ def say(msg):
 
 
 def open_port(port, baud):
-    # Opening raises DTR and RTS together, which leaves the board running. Changing either one
-    # afterwards resets it, or (RTS alone) puts it in download mode, so they are left as they are.
-    return serial.Serial(port, baud, timeout=0.1)
-
-
-def reset(s):
+    s = serial.Serial(port, baud, timeout=0.1)  # opening switches DTR and RTS on: the board is held in reset
     s.dtr = False  # IO0 high: normal boot, not download mode
-    s.rts = True   # EN low: hold in reset (esptool's hard reset)
+    s.rts = True   # EN low, as esptool's hard reset does
     time.sleep(0.1)
-    s.rts = False
+    s.rts = False  # EN high: the board starts
+    return s
 
 
 def main():
@@ -43,13 +41,11 @@ def main():
     ap.add_argument("port", nargs="?", default=os.environ.get("ESPPORT", "/dev/ttyUSB0"))
     ap.add_argument("-b", "--baud", type=int, default=115200)
     ap.add_argument("-t", "--timestamps", action="store_true", help="prefix each line with the time it arrived")
-    ap.add_argument("-r", "--reset", action="store_true", help="reset the board when first connected")
     args = ap.parse_args()
 
     out = sys.stdout.buffer
     at_line_start = True
     lock = open(LOCK, "a")
-    reset_next = args.reset
     last_error = None
 
     while True:
@@ -69,9 +65,6 @@ def main():
 
         last_error = None
         say(f"connected to {args.port} at {args.baud} baud")
-        if reset_next:
-            reset(s)
-            reset_next = False
         try:
             while not os.path.exists(REQUEST):
                 data = s.read(s.in_waiting or 1)
@@ -88,7 +81,6 @@ def main():
                 out.write(data)
                 out.flush()
             say("flashing: port released")
-            reset_next = True
         except (serial.SerialException, OSError) as e:
             say(f"lost {args.port}: {e}")
         finally:

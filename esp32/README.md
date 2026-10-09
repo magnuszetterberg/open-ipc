@@ -25,7 +25,7 @@ esp32/idf.sh idf.py -C camera menuconfig
 
 `idf.sh` runs any command with ESP-IDF set up, from any shell (fish included), so nothing has to be sourced first. The serial port is found automatically when flashing; set `ESPPORT=/dev/ttyUSB0` to choose one.
 
-`monitor.sh` stays open: while `build.sh` flashes it lets go of the port, and afterwards it reconnects and resets the board so the whole boot log shows. It also waits through unplugging. Connecting doesn't reset the board; `-r` does. `-t` puts the arrival time in front of each line. Ctrl-C quits. ESP-IDF's own monitor (`build.sh camera monitor`, Ctrl-] quits) is still there for decoding crash backtraces.
+`monitor.sh` stays open: while `build.sh` flashes it lets go of the port, and afterwards it reconnects. It also waits through unplugging. Connecting restarts the board, so the whole boot log shows: on Linux, opening the port switches the USB adapter's DTR and RTS lines on, which holds the ESP32-CAM in reset until the monitor switches them off. `-t` puts the arrival time in front of each line. Ctrl-C quits. ESP-IDF's own monitor (`build.sh camera monitor`, Ctrl-] quits) is still there for decoding crash backtraces.
 
 To flash an ESP32-CAM on its ESP32-CAM-MB USB board, just plug it in. With a plain USB serial adapter instead, connect IO0 to GND, then press reset before flashing; disconnect IO0 and reset again to run.
 
