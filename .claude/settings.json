@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "ask": [
+      "Edit(docs/DESIGN.md)",
+      "Edit(CLAUDE.md)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.command' | grep -qE 'DESIGN\\.md|CLAUDE\\.md' && echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"docs/DESIGN.md and CLAUDE.md are locked: any shell command touching them needs your approval\"}}' || true"
+          }
+        ]
+      }
+    ]
+  }
+}
