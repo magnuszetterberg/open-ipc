@@ -32,3 +32,21 @@ menu "wfb-ng link"
             Each costs about 1.5 KB of internal RAM.
 
 endmenu
+
+menu "Ethernet out"
+
+    config BASE_OUT_HOST
+        string "Send video to (IPv4 address)"
+        default ""
+        help
+            Where the base station sends each camera's RTP/JPEG over UDP, e.g. the NUC running
+            VIDEO=jpeg ./receiver.sh. Empty: receive and report only.
+
+    config BASE_OUT_PORT
+        int "UDP port"
+        range 1 65535
+        default 5600
+        help
+            receiver.sh listens on 5600.
+
+endmenu

@@ -1,6 +1,6 @@
-// Base-station firmware (app layer, R4). M4 step 1 (#17): receive one camera's wfb-ng frames in
-// promiscuous mode, decode them with wfb_rx, and report once a second what came through: the
-// counter (numbered payloads) or RTP/JPEG video. Ethernet output follows in #18.
+// Base-station firmware (app layer, R4): receive one camera's wfb-ng frames in promiscuous mode, decode
+// them with wfb_rx, send the payloads (RTP/JPEG video) over Ethernet as UDP (#18), and report once a
+// second what came through.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +10,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "eth.hpp"
 #include "keys.hpp"
 #include "radio.hpp"
 #include "wfb_rx.hpp"
@@ -51,13 +52,33 @@ struct payload_check : wfb_payload_sink
     }
 };
 
+// Each payload goes to the check, and out over Ethernet when that is up.
+struct tee : wfb_payload_sink
+{
+    payload_check *check;
+    udp_out *out;
+    void send_payload(const uint8_t *buf, size_t size) override
+    {
+        check->send_payload(buf, size);
+        if (out != nullptr)
+        {
+            out->send_payload(buf, size);
+        }
+    }
+};
+
+static udp_out *ethernet_out = nullptr;  // set by app_main when Ethernet is up and a host is configured
+
 static void receive_task(void *arg)
 {
     radio_rx *radio = static_cast<radio_rx *>(arg);
     const uint32_t channel_id = ((uint32_t)CONFIG_LINK_ID << 8) + CONFIG_LINK_RADIO_PORT;
 
     static payload_check check;
-    static wfb_rx rx(check);
+    static tee out;
+    out.check = &check;
+    out.out = ethernet_out;
+    static wfb_rx rx(out);
     wfb_rx_config cfg;
     cfg.channel_id = channel_id;
     cfg.ring_size = CONFIG_LINK_RING_SIZE;
@@ -75,7 +96,7 @@ static void receive_task(void *arg)
     uint64_t next_stats_us = esp_timer_get_time() + 1000000;
     uint32_t ours = 0, others = 0;
     int rssi_sum = 0;
-    uint32_t last_heard = 0, last_overflow = 0;
+    uint32_t last_heard = 0, last_overflow = 0, last_sent = 0, last_failed = 0;
     wfb_rx_stats last = rx.stats;
 
     for (;;)
@@ -123,6 +144,14 @@ static void receive_task(void *arg)
             ESP_LOGI(TAG, "video: %lu fps, %lu RTP packets, %lu kbit/s", (unsigned long)check.video_frames,
                      (unsigned long)check.rtp, (unsigned long)(check.bytes * 8 / 1000));
         }
+        if (ethernet_out != nullptr)
+        {
+            ESP_LOGI(TAG, "ethernet: %lu sent, %lu failed, link drops since boot %lu",
+                     (unsigned long)(ethernet_out->sent - last_sent), (unsigned long)(ethernet_out->failed - last_failed),
+                     (unsigned long)eth_link_drops());
+            last_sent = ethernet_out->sent;
+            last_failed = ethernet_out->failed;
+        }
         if (check.other)
         {
             ESP_LOGW(TAG, "%lu payloads neither counter nor RTP/JPEG", (unsigned long)check.other);
@@ -143,5 +172,19 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(radio_start(radio_cfg));
     static radio_rx radio;
     ESP_ERROR_CHECK(radio.start(CONFIG_LINK_RX_SLOTS));
+
+    // Ethernet out: without a link or a host, the base station still receives and reports
+    if (strlen(CONFIG_BASE_OUT_HOST) == 0)
+    {
+        ESP_LOGW(TAG, "no Ethernet destination set (menuconfig: Ethernet out): receiving and reporting only");
+    }
+    else if (eth_start(eth_config(), 15000) == ESP_OK)
+    {
+        static udp_out out;
+        if (out.open(CONFIG_BASE_OUT_HOST, CONFIG_BASE_OUT_PORT) == ESP_OK)
+        {
+            ethernet_out = &out;
+        }
+    }
     xTaskCreatePinnedToCore(receive_task, "receive", 6144, &radio, 5, nullptr, 1);  // core 1 (Coding conventions)
 }
