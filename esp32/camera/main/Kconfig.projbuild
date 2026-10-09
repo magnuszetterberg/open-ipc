@@ -43,14 +43,64 @@ menu "wfb-ng link"
         range 1 32
         default 12
 
+    choice LINK_PAYLOAD
+        prompt "What to send"
+        default LINK_PAYLOAD_VIDEO
+
+        config LINK_PAYLOAD_VIDEO
+            bool "Camera video (RTP/JPEG)"
+            help
+                Play it on the receiver with VIDEO=jpeg ./rx.sh.
+
+        config LINK_PAYLOAD_COUNTER
+            bool "Counter (link test)"
+            help
+                Numbered payloads instead of video, for checking the link itself:
+                esp32/tools/counter_check.py on the receiver reports any that go missing.
+    endchoice
+
     config LINK_COUNTER_RATE
-        int "Counter payloads per second (M1 test)"
+        int "Counter payloads per second"
+        depends on LINK_PAYLOAD_COUNTER
         range 1 1000
         default 100
 
     config LINK_COUNTER_SIZE
-        int "Counter payload size in bytes (M1 test)"
+        int "Counter payload size in bytes"
+        depends on LINK_PAYLOAD_COUNTER
         range 32 1448
         default 1000
+
+endmenu
+
+menu "Camera"
+    depends on LINK_PAYLOAD_VIDEO
+
+    choice CAMERA_FRAME_SIZE
+        prompt "Frame size"
+        default CAMERA_FRAME_VGA
+
+        config CAMERA_FRAME_QVGA
+            bool "320x240"
+        config CAMERA_FRAME_VGA
+            bool "640x480"
+        config CAMERA_FRAME_SVGA
+            bool "800x600"
+    endchoice
+
+    config CAMERA_CLOSE_BLOCK_PER_FRAME
+        bool "Finish the FEC block at the end of each frame"
+        default y
+        help
+            A 640x480 frame is about 7 packets, an FEC block 8. Finishing the block after each frame
+            (padding it, as wfb_tx's FEC timeout does) lets the receiver recover a lost packet at once,
+            instead of when the next frame completes the block 40 ms later. Costs about 14% airtime.
+
+    config CAMERA_JPEG_QUALITY
+        int "JPEG quality (lower is better and bigger)"
+        range 4 63
+        default 12
+        help
+            The OV2640's JPEG quality setting. 12 gives about 11 KB per 640x480 frame.
 
 endmenu
