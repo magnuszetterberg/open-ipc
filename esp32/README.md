@@ -60,6 +60,7 @@ The core components build for Linux too (R4), against the system libsodium, usin
 | `test_wfb_ng` | our transmitter into the real `wfb_rx`, and the real `wfb_tx` into our receiver |
 | `test_80211` | the 802.11 header: the address bytes `wfb_rx` filters on, the sequence number |
 | `test_rtp_jpeg` | RTP/JPEG: which JPEGs are accepted, packet layout, round trip, loss, GStreamer decoding our packets |
+| `test_rtsp` | the RTSP server's replies, and ffmpeg playing a stream over TCP and UDP |
 
 ## Camera video (M2)
 
@@ -71,16 +72,28 @@ VIDEO=jpeg ./rx.sh
 
 The video window opens with the first frame. `esp32/monitor.sh` shows the ESP32's side once a second: `video: 25 fps, 10 KB/frame, 200 packets/s, 300 frames/s on air, 0 dropped by WiFi`. Frame size, JPEG quality and whether each frame finishes its FEC block are in `idf.py menuconfig` under "Camera".
 
-## Base station (M4)
+## Base station (M4, M5)
 
-`base/` is the base-station firmware for the Olimex ESP32-POE: it receives a camera's wfb-ng frames in promiscuous mode, decodes them with the same core as the NUC (`wfb_rx`), and sends the video over Ethernet as UDP, so `VIDEO=jpeg ./receiver.sh` on another machine plays it. Set the destination in `idf.py -C base menuconfig` under "Ethernet out" (left empty in the repo; it's your network's address). Without it, or without a cable, it receives and reports only.
+`base/` is the base-station firmware for the Olimex ESP32-POE. It receives up to three cameras' wfb-ng streams in promiscuous mode (camera N: video on radio port N, telemetry on 0x10 + N), decodes them with the same core as the NUC, and serves them over Ethernet:
+
+- each camera's video as RTSP, `rtsp://<base station>:8554/cam0` ... `cam2`, RTP/JPEG passed through (VLC, ffmpeg and GStreamer play it);
+- each camera's telemetry as UDP to the host set under "Ethernet out" (port 5610 + N), with the signal quality the base station measures added (`rssi_dbm`, `loss_pct`, `video_kbps`);
+- camera 0's video also as UDP to that host's port 5600, for `VIDEO=jpeg ./receiver.sh` (M4's check).
 
 ```sh
 ESPPORT=/dev/ttyUSB1 esp32/build.sh base flash
 esp32/monitor.sh /dev/ttyUSB1
 ```
 
-Once a second it prints what came through: frames and RSSI, wfb_rx's counters (`data`, `dec_err`, `fec_rec`, `lost`, `out`), the video's fps and bitrate, and what went out over Ethernet.
+To push a camera to the RTMP server with its telemetry burned in, on the host the telemetry goes to:
+
+```sh
+VIDEO_IN=rtsp://<base station>:8554/cam0 TELEMETRY_PORT=5610 ./burnin.sh rtmp://<server>/<app>/cam0
+```
+
+Once a second the base station prints, per camera, frames and RSSI, frame rate, bitrate, FEC repairs and losses, telemetry messages and RTSP clients; and overall, what the radio heard, RTSP packets sent and dropped, Ethernet link drops and free RAM.
+
+The ESP32-POE has no PSRAM. Three cameras fit with a receive ring of one FEC block per stream (enough on a radio that delivers in order; `test_rx` checks it), 8 receive slots and 2 RTSP clients: measured on an ESP32 with three receivers, 66 KB of RAM is left before Ethernet and RTSP. "Ethernet" can be turned off in menuconfig, to run the firmware on an ESP32-CAM as a stand-in receiver.
 
 On the original ESP32, generating the Ethernet clock (as the ESP32-POE does) can be unstable while WiFi runs (ESP32 errata). The stats line counts Ethernet link drops to show it (#18).
 
@@ -112,6 +125,7 @@ Keep the ESP32 a metre or more from the Ralink stick: at 20 dBm, centimetres can
 | `components/cam/` | OV2640 JPEG capture, AI-Thinker pin map |
 | `components/rtp_jpeg/` | JPEG frames as RTP packets (RFC 2435) and back |
 | `components/eth/` | Ethernet on the Olimex ESP32-POE (LAN8720), and UDP out |
+| `components/rtsp_server/` | RTSP for the base station's camera streams (builds for Linux too) |
 | `base/` | base-station firmware (ESP-IDF project) |
 | `tools/counter_check.py` | checks the M1 counter stream on the receiver |
 
