@@ -9,6 +9,8 @@
 #
 # Video in:  UDP 127.0.0.1:5602  (PORT=5602 ./sender.sh)
 # Video out: UDP 127.0.0.1:5600  (./receiver.sh)
+# Telemetry out: UDP 127.0.0.1:5610, from an ESP32-CAM's telemetry stream (radio port 16)
+# Receiver stats: the video wfb_rx's latest RX_ANT and PKT lines in /tmp/open-ipc-rx.stats
 # Ctrl-C hands the adapter(s) back to NetworkManager.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -23,6 +25,9 @@ FEC_N=${FEC_N:-12}          # ... + 4 parity per block
 TX_POWER=${TX_POWER:-500}   # mBm; 5 dBm suits both ends on one machine (tx.sh uses 20 dBm)
 IN_PORT=${IN_PORT:-5602}
 OUT_PORT=${OUT_PORT:-5600}
+TELEMETRY_PORT=${TELEMETRY_PORT:-5610}
+TELEMETRY_RADIO_PORT=16      # ESP32-CAM 0's telemetry (docs/DESIGN.md: 0x10 + camera index)
+STATS_FILE=${STATS_FILE:-/tmp/open-ipc-rx.stats}
 WFB=wfb-ng
 
 [[ $EUID -eq 0 ]] || { echo "run with sudo" >&2; exit 1; }
@@ -69,7 +74,14 @@ done
 
 if [[ $ROLE != tx ]]; then
   iw dev "$RX_IF" info | grep -E 'Interface|type|channel'
-  "$WFB/wfb_rx" -K keys/gs.key -p 0 -c 127.0.0.1 -u "$OUT_PORT" "$RX_IF" > >(sed -u 's/^/[rx] /') 2>&1 &
+  # Its stats lines also go to $STATS_FILE: the latest RX_ANT (signal) and PKT (loss) pair, for burn-in.
+  "$WFB/wfb_rx" -K keys/gs.key -p 0 -c 127.0.0.1 -u "$OUT_PORT" "$RX_IF" \
+    > >(tee >(awk -v f="$STATS_FILE" '/\tRX_ANT\t/ {ant = $0} /\tPKT\t/ {print ant > f; print > f; close(f)}') \
+        | sed -u 's/^/[rx] /') 2>&1 &
+  pids+=($!)
+  # Telemetry: its per-second stats would crowd the terminal, so only its errors show.
+  "$WFB/wfb_rx" -K keys/gs.key -p "$TELEMETRY_RADIO_PORT" -c 127.0.0.1 -u "$TELEMETRY_PORT" "$RX_IF" \
+    > /dev/null 2> >(sed -u 's/^/[telemetry] /') &
   pids+=($!)
 fi
 if [[ $ROLE != rx ]]; then
@@ -79,5 +91,5 @@ if [[ $ROLE != rx ]]; then
   pids+=($!)
 fi
 
-echo "link up ($ROLE, channel $CHANNEL). Video in: UDP :$IN_PORT, out: UDP :$OUT_PORT. Ctrl-C to stop."
+echo "link up ($ROLE, channel $CHANNEL). Video in: UDP :$IN_PORT, out: UDP :$OUT_PORT. Telemetry out: UDP :$TELEMETRY_PORT. Ctrl-C to stop."
 wait
