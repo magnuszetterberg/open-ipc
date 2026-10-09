@@ -1,0 +1,36 @@
+{
+    // ESP32 firmware tasks. All go through esp32/build.sh, so they build exactly like the terminal does.
+    // Terminal > Run Task, or Ctrl+Shift+B for the default build.
+    // Leave "serial monitor" running: it lets go of the port while "flash" runs, then reconnects.
+    "version": "2.0.0",
+    "options": { "cwd": "${workspaceFolder}/esp32" },
+    "tasks": [
+        {
+            "label": "ESP32: build camera",
+            "type": "shell",
+            "command": "./build.sh camera build",
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": { "base": "$gcc", "fileLocation": "autoDetect" }
+        },
+        {
+            "label": "ESP32: flash camera",
+            "detail": "Builds first if needed; a running serial monitor steps aside meanwhile",
+            "type": "shell",
+            "command": "./build.sh camera flash",
+            "problemMatcher": { "base": "$gcc", "fileLocation": "autoDetect" }
+        },
+        {
+            "label": "ESP32: serial monitor",
+            "detail": "Stays open across flashes and unplugging; Ctrl+C quits",
+            "type": "shell",
+            "command": "./monitor.sh -t",
+            "problemMatcher": []
+        },
+        {
+            "label": "ESP32: menuconfig camera",
+            "type": "shell",
+            "command": "./build.sh camera menuconfig",
+            "problemMatcher": []
+        }
+    ]
+}

@@ -1,0 +1,8 @@
+# New code in esp32/ (design: Coding conventions, Style). Adapted wfb-ng code keeps wfb-ng's own style (R3).
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 110
+BreakBeforeBraces: Allman
+PointerAlignment: Right
+AllowShortFunctionsOnASingleLine: Empty
+SortIncludes: false

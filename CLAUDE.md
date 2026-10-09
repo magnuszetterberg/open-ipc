@@ -14,3 +14,8 @@
 - ESP32 work is done on one branch per milestone in DESIGN.md, named `feat/esp32-m<N>-<topic>` and branched from `main`.
 - A milestone branch is merged into `main` only when its "Done when" check passes, and only with the user's OK.
 - A change to the PC scripts is a commit of its own, and the existing H.264 path must still work after it.
+
+## Tickets
+
+- Tickets are GitHub Issues under the milestone they belong to (M0–M5), labelled `esp32`, `pc` or `decision`.
+- Every commit references its ticket: `Refs #N`, or `Closes #N` in the commit that finishes it.

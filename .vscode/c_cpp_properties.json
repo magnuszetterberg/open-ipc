@@ -1,0 +1,11 @@
+{
+    // IntelliSense from the build's own compile commands: build once (Ctrl+Shift+B) and the ESP-IDF headers resolve.
+    // Pick the configuration in the status bar when more firmwares exist.
+    "configurations": [
+        {
+            "name": "ESP32 camera",
+            "compileCommands": "${workspaceFolder}/esp32/camera/build/compile_commands.json"
+        }
+    ],
+    "version": 4
+}
