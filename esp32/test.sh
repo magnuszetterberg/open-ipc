@@ -4,6 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+../build.sh                                   # wfb-ng's own wfb_tx and wfb_rx, for test_wfb_ng
 ./idf.sh cmake -S host -B host/build -G Ninja -DCMAKE_BUILD_TYPE=Debug >/dev/null
 ./idf.sh cmake --build host/build
 ./idf.sh ctest --test-dir host/build --output-on-failure "$@"

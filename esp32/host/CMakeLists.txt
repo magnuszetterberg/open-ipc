@@ -19,3 +19,7 @@ endfunction()
 host_test(test_fec wfb_core)
 host_test(test_tx wfb_core)
 host_test(test_rx wfb_core)
+
+# Runs the real wfb_tx and wfb_rx from the submodule; test.sh builds them first.
+host_test(test_wfb_ng wfb_core)
+target_compile_definitions(test_wfb_ng PRIVATE WFB_NG_DIR="${CMAKE_CURRENT_LIST_DIR}/../../wfb-ng")

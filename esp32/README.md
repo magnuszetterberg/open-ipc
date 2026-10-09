@@ -50,7 +50,14 @@ The core components build for Linux too (R4), against the system libsodium, usin
 
 ## Testing against the real wfb-ng without a radio
 
-`wfb_rx -a <port>` takes packets over UDP from a local socket instead of a WiFi card, and `wfb_tx` can send to a local socket the same way. The Linux tests use this to check our encoder against the real `wfb_rx`, and the real `wfb_tx` against our decoder. That path carries everything but the 802.11 header, which the on-air test (M1) covers.
+`wfb_rx -a <port>` takes packets over UDP instead of from a WiFi card, and `wfb_tx -D <port>` sends to a UDP port instead of a card. `test_wfb_ng` uses both to check our transmitter against the real `wfb_rx`, and the real `wfb_tx` against our receiver, with the test keys. That path carries everything but the 802.11 header, which the on-air test (M1) covers. `test.sh` builds wfb-ng first if needed.
+
+| test | checks |
+|---|---|
+| `test_fec` | zfex from the submodule recovers any 4 lost packets of 12 |
+| `test_tx` | our transmitter's packet sequence; the ground key opens what it sends |
+| `test_rx` | our transmitter into our receiver, with and without loss; wrong channel or key gets nothing |
+| `test_wfb_ng` | our transmitter into the real `wfb_rx`, and the real `wfb_tx` into our receiver |
 
 ## Layout
 
