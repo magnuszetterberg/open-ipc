@@ -83,3 +83,7 @@ Comparing the two video windows (tx preview vs rx) is quicker, but it reads a bi
 | clock − `TX` overlay | encode + radio + decode + display |
 
 Take several photos and average them. A 60 Hz screen limits each reading to about ±17 ms, and a 30 fps camera to about ±33 ms.
+
+## License
+
+GPL-3.0 (see `LICENSE`), the same as wfb-ng. Files adapted from wfb-ng keep its copyright notice.
