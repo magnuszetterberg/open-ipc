@@ -1,0 +1,56 @@
+menu "wfb-ng link"
+
+    config LINK_CHANNEL
+        int "WiFi channel"
+        range 1 13
+        default 6
+        help
+            Must match CHANNEL on the receiver (link.sh's default is 6).
+
+    config LINK_MCS
+        int "HT20 MCS index"
+        range 0 7
+        default 3
+        help
+            The data rate. MCS 3 is 26 Mbit/s, as link.sh's MCS default.
+
+    config LINK_TX_POWER_DBM
+        int "Transmit power (dBm)"
+        range 2 20
+        default 20
+
+    config LINK_ID
+        hex "Link ID"
+        range 0x0 0xffffff
+        default 0x0
+        help
+            wfb-ng's link_id; with the radio port it makes the channel_id the receiver listens for.
+
+    config LINK_RADIO_PORT
+        int "Radio port"
+        range 0 255
+        default 0
+        help
+            One per camera on a shared receiver. link.sh's wfb_rx listens on port 0.
+
+    config LINK_FEC_K
+        int "FEC k (data packets per block)"
+        range 1 32
+        default 8
+
+    config LINK_FEC_N
+        int "FEC n (data + FEC packets per block)"
+        range 1 32
+        default 12
+
+    config LINK_COUNTER_RATE
+        int "Counter payloads per second (M1 test)"
+        range 1 1000
+        default 100
+
+    config LINK_COUNTER_SIZE
+        int "Counter payload size in bytes (M1 test)"
+        range 32 1448
+        default 1000
+
+endmenu
