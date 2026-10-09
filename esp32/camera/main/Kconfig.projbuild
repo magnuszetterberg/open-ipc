@@ -33,6 +33,27 @@ menu "wfb-ng link"
         help
             One per camera on a shared receiver. link.sh's wfb_rx listens on port 0.
 
+    config LINK_TELEMETRY
+        bool "Send telemetry"
+        default y
+        help
+            Once a second, a small JSON message on its own radio port: uptime, frame rate, frame
+            size, transmit power, temperature (null: the ESP32 has no supported sensor).
+
+    config LINK_TELEMETRY_PORT
+        int "Telemetry radio port"
+        depends on LINK_TELEMETRY
+        range 0 255
+        default 16
+        help
+            0x10 + the camera's index (16, 17, 18), next to video on ports 0, 1, 2 (docs/DESIGN.md).
+
+    config LINK_TELEMETRY_INTERVAL_MS
+        int "Telemetry interval (ms)"
+        depends on LINK_TELEMETRY
+        range 100 10000
+        default 1000
+
     config LINK_FEC_K
         int "FEC k (data packets per block)"
         range 1 32
