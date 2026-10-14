@@ -10,7 +10,7 @@ We are building ESP32 firmware that speaks the wfb-ng protocol. ESP32-CAMs send 
 2. **Reference receiver.** An unmodified `wfb_rx` on the NUC decodes that link, and `rx.sh` shows the video.
 3. **Base-station firmware.** An ESP32 with Ethernet receives up to 3 cameras at once and serves each one on the LAN as RTSP, with its telemetry next to it.
 4. **Measurable.** Latency is measured the same way as today, with `clock.html`.
-5. **Telemetry.** Each camera sends telemetry next to its video, on its own radio port: temperature and uptime to start with. Signal quality is added where the link is received. The format may later mimic DJI's video-system telemetry field for field, once there is a sample to match.
+5. **Telemetry.** Each camera sends telemetry next to its video, on its own radio port: uptime, frame rate and frame size to start with, and temperature where the board has a sensor it can read. The ESP32-CAM's classic ESP32 has none, so it sends `null`. Signal quality is added where the link is received. The format may later mimic DJI's video-system telemetry field for field, once there is a sample to match.
 6. **To the video server.** A Linux script burns the telemetry into each camera's video, encodes it as H.264 and pushes it to the RTMP video server.
 
 **Not goals**
@@ -88,7 +88,7 @@ The ESP32 uses the same settings `link.sh` uses today, so the first test needs n
 | Encryption | Session key sent with `crypto_box`, each packet with ChaCha20-Poly1305 (libsodium) | wfb-ng protocol |
 | Session announce | Every 1000 ms | `SESSION_KEY_ANNOUNCE_MSEC` in `wifibroadcast.hpp` |
 | Video | RTP/JPEG (RFC 2435) from the OV2640, 640×480 (*start*) | R7 |
-| Telemetry | One small JSON object per message, once a second (*start*): camera, sequence number, uptime, temperature | Readable anywhere; fields can be added without breaking readers |
+| Telemetry | One small JSON object per message, once a second (*start*): camera, sequence number, uptime, frame rate, frame size, transmit power; temperature where the board has a sensor, otherwise `null` | Readable anywhere; fields can be added without breaking readers |
 | Signal quality | Measured where the link is received: RSSI, loss and bitrate, added by the base station (or from `wfb_rx`'s stats on the NUC) | The camera can't know how well it is heard |
 | UDP port on the NUC | 5600, as now | `receiver.sh` gets a JPEG mode next to H.264 |
 | Base station out (M5) | RTSP per camera, `rtsp://<base>:8554/camN`, RTP/JPEG passed through; telemetry as UDP | RTSP is standard; the re-encoding to H.264 for RTMP happens on a PC |
@@ -167,7 +167,7 @@ Each milestone ends with something that can be shown working. M6 doesn't depend 
 4. **M3 Tuning.** Measure frame rate, bitrate and latency against resolution, MCS and FEC. Done when the results are in the README.
 5. **M4 Base-station receive.** An Ethernet ESP32 receives one camera and sends its RTP/JPEG over Ethernet to the NUC. Done when `receiver.sh` on the NUC shows it.
 6. **M5 Three cameras to the video server.** The base station receives three cameras and serves each as RTSP, with its telemetry and signal quality as UDP. Done when all three play from another machine, and one reaches the RTMP video server through the burn-in script with its telemetry burned in.
-7. **M6 Telemetry and burn-in.** The camera sends temperature and uptime once a second on its telemetry port. On the NUC, the telemetry is received next to the video, and the burn-in script draws it, with signal quality, onto the video, encodes H.264 and pushes RTMP (or records a file when no server is given). Done when the output shows the telemetry burned in, updating every second.
+7. **M6 Telemetry and burn-in.** The camera sends its uptime once a second on its telemetry port (and temperature, where the board has a sensor). On the NUC, the telemetry is received next to the video, and the burn-in script draws it, with signal quality, onto the video, encodes H.264 and pushes RTMP (or records a file when no server is given). Done when the output shows the telemetry burned in, updating every second.
 
 ## Open questions and risks
 
@@ -185,3 +185,4 @@ Each milestone ends with something that can be shown working. M6 doesn't depend 
 | The ESP32-POE generates its Ethernet clock on the ESP32, which the ESP32 errata says can be unstable while WiFi runs; the base station needs both | M4 test (#18) |
 | Both ESP32-CAMs hear and transmit weakly (likely their antenna-select resistors) | #23 |
 | DJI-style telemetry: which DJI system, and a sample to match field for field | when there is a sample |
+| The classic ESP32 has no supported temperature sensor | M6: `temp_c` is `null` on the ESP32-CAM; an external sensor later, if needed |
