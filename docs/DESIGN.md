@@ -1,6 +1,6 @@
 # ESP32 wfb-ng link: design
 
-Status: M0–M2 done. Updated 2026-10-09: RTSP out of the base station, a telemetry channel, and telemetry burned into the video on a PC.
+Status: M0–M2 done. Updated 2026-10-15: M7, a web view on the base station.
 
 We are building ESP32 firmware that speaks the wfb-ng protocol. ESP32-CAMs send video and telemetry to the receiver that already works (the NUC with the Ralink stick), and later to an ESP32 with Ethernet that serves each camera on the LAN. A PC burns the telemetry into the video and pushes it to the RTMP video server.
 
@@ -12,6 +12,7 @@ We are building ESP32 firmware that speaks the wfb-ng protocol. ESP32-CAMs send 
 4. **Measurable.** Latency is measured the same way as today, with `clock.html`.
 5. **Telemetry.** Each camera sends telemetry next to its video, on its own radio port: temperature and uptime to start with. Signal quality is added where the link is received. The format may later mimic DJI's video-system telemetry field for field, once there is a sample to match.
 6. **To the video server.** A Linux script burns the telemetry into each camera's video, encodes it as H.264 and pushes it to the RTMP video server.
+7. **Web view.** The base station serves a simple web page that shows each camera's live video and telemetry, in any browser on the LAN, with nothing installed.
 
 **Not goals**
 
@@ -37,6 +38,7 @@ ESP32-CAM 1 (ports 0, 0x10) ─┐
 ESP32-CAM 2 (ports 1, 0x11) ─┼─ ch 6 ─► base station: ESP32 + Ethernet ─► LAN
 ESP32-CAM 3 (ports 2, 0x12) ─┘          RTSP per camera (RTP/JPEG, untouched)
                                         telemetry per camera (UDP), with signal quality added
+                                        web page: each camera as MJPEG over HTTP (M7)
 LAN ─► PC: burn telemetry into the video, encode H.264 ─► RTMP ─► video server
 ```
 
@@ -53,7 +55,7 @@ telemetry (once a second)   ─► wfb core, its own stream ──────�
 | `rtp_jpeg` | core | ESP32 and Linux | splits a JPEG into RFC 2435 RTP packets, and back |
 | `radio` | platform | ESP32 | raw send with `esp_wifi_80211_tx()`, receive in promiscuous mode |
 | `camera` app | app | ESP32-CAM | camera → packetizer → core → radio; telemetry → core → radio |
-| `base` app | app | ESP32 + Ethernet | radio → core → RTSP and telemetry on Ethernet |
+| `base` app | app | ESP32 + Ethernet | radio → core → RTSP, telemetry and the web view on Ethernet |
 | burn-in script | — | Linux PC | video + telemetry in; overlay, H.264, RTMP out |
 
 ## Architecture rules
@@ -92,6 +94,7 @@ The ESP32 uses the same settings `link.sh` uses today, so the first test needs n
 | Signal quality | Measured where the link is received: RSSI, loss and bitrate, added by the base station (or from `wfb_rx`'s stats on the NUC) | The camera can't know how well it is heard |
 | UDP port on the NUC | 5600, as now | `receiver.sh` gets a JPEG mode next to H.264 |
 | Base station out (M5) | RTSP per camera, `rtsp://<base>:8554/camN`, RTP/JPEG passed through; telemetry as UDP | RTSP is standard; the re-encoding to H.264 for RTMP happens on a PC |
+| Base station web view (M7) | `http://<base>/`: a tile per camera. `http://<base>/camN.mjpg`: its video as MJPEG (`multipart/x-mixed-replace`), JPEGs rebuilt from RTP/JPEG, not re-encoded. `http://<base>/status.json`: each camera's telemetry and signal quality | Browsers can't play RTSP, but show MJPEG in an `<img>`; the cameras' JPEGs pass through as sent |
 
 One camera at 640×480 and 10–15 fps sends an estimated 1.5–3.5 Mbit/s. Three cameras share one channel, so about 5–10 Mbit/s in total. These are estimates; M3 measures them.
 
@@ -159,7 +162,7 @@ esp32/
 
 ## Milestones
 
-Each milestone ends with something that can be shown working. M6 doesn't depend on M4 and M5, so it can be done before them.
+Each milestone ends with something that can be shown working. M6 doesn't depend on M4 and M5, so it can be done before them. M7 builds on M5.
 
 1. **M0 Toolchain and skeleton.** ESP-IDF installed, `esp32/` laid out, the core building on Linux with zfex and libsodium. Done when the host tests pass.
 2. **M1 On-air compatibility.** Any ESP32 sends wfb-ng frames with a test payload (a counter). Done when the NUC's unmodified `wfb_rx` decodes them and the counter arrives on port 5600.
@@ -168,6 +171,7 @@ Each milestone ends with something that can be shown working. M6 doesn't depend 
 5. **M4 Base-station receive.** An Ethernet ESP32 receives one camera and sends its RTP/JPEG over Ethernet to the NUC. Done when `receiver.sh` on the NUC shows it.
 6. **M5 Three cameras to the video server.** The base station receives three cameras and serves each as RTSP, with its telemetry and signal quality as UDP. Done when all three play from another machine, and one reaches the RTMP video server through the burn-in script with its telemetry burned in.
 7. **M6 Telemetry and burn-in.** The camera sends temperature and uptime once a second on its telemetry port. On the NUC, the telemetry is received next to the video, and the burn-in script draws it, with signal quality, onto the video, encodes H.264 and pushes RTMP (or records a file when no server is given). Done when the output shows the telemetry burned in, updating every second.
+8. **M7 Web view on the base station.** The base station serves a web page with a tile per camera: its live video as MJPEG over HTTP, and its telemetry and signal quality, refreshed once a second. Without PSRAM, three whole frames don't fit in RAM, so each frame goes to the browser as its packets arrive, and a frame with a lost packet is cut off and skipped. The number of viewers is capped. The web view needs Ethernet, so an ESP32-CAM standing in as the base station (Ethernet off) has none. Done when a browser on the LAN shows every connected camera's live video and telemetry from the base station's page.
 
 ## Open questions and risks
 
@@ -184,4 +188,6 @@ Each milestone ends with something that can be shown working. M6 doesn't depend 
 | wfb-ng is GPLv3, so firmware built from its code is GPLv3. | The repo is GPL-3.0 (#10) |
 | The ESP32-POE generates its Ethernet clock on the ESP32, which the ESP32 errata says can be unstable while WiFi runs; the base station needs both | M4 test (#18) |
 | Both ESP32-CAMs hear and transmit weakly (likely their antenna-select resistors) | #23 |
+| RAM for the web view: HTTP connections next to three receivers and RTSP, without PSRAM (about 45 KB free with Ethernet up) | M7: viewers capped, measured on the ESP32-POE |
+| CPU on the base station: at 160 MHz with `-Og`, the ESP32-POE dropped received frames from one camera sending about 600 frames/s; 240 MHz with `-O2` dropped far fewer | M5 and M7: measure with three cameras |
 | DJI-style telemetry: which DJI system, and a sample to match field for field | when there is a sample |
