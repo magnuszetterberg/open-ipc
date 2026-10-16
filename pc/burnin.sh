@@ -9,6 +9,10 @@
 # Telemetry in: UDP 5610 and signal from /tmp/open-ipc-rx.stats, both from link.sh rx; with VIDEO_IN,
 # UDP 5610 from the LAN, signal included (the base station sends to 5610 + camera).
 # Use it instead of receiver.sh/rx.sh: both listen on port 5600.
+#
+# With the radar camera (docs/DESIGN.md, M10): RADAR=N adds its finding as a line of text (its telemetry,
+# 5610 + N); RADAR_IN=rtsp://.../camN also puts its picture beside the camera's (RADAR_VIEW=beside, the
+# default; RADAR_VIEW=text for the line only). ./ipc stream N URL --radar M sets them from the base station.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -21,6 +25,10 @@ TELEMETRY_BIND=${TELEMETRY_BIND:-$([[ -n $VIDEO_IN ]] && echo 0.0.0.0 || echo 12
 STATS_FILE=${STATS_FILE:-/tmp/open-ipc-rx.stats}
 BITRATE=${BITRATE:-2M}
 FPS=${FPS:-25}               # the camera's rate: 25 at 640x480 and 800x600, 50 at 320x240
+RADAR=${RADAR:-}
+RADAR_IN=${RADAR_IN:-}
+RADAR_VIEW=${RADAR_VIEW:-beside}
+HEIGHT=${HEIGHT:-480}        # with the radar's picture beside it, both are scaled to this height
 
 text=$(mktemp --suffix=.txt)
 sdp=$(mktemp --suffix=.sdp)
@@ -33,7 +41,10 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 echo "waiting for telemetry..." >"$text"
-python3 telemetry_overlay.py --out "$text" --port "$TELEMETRY_PORT" --bind "$TELEMETRY_BIND" --stats "$STATS_FILE" &
+radar_args=()
+[[ -n $RADAR ]] && radar_args=(--radar-port "$((5610 + RADAR))")
+python3 telemetry_overlay.py --out "$text" --port "$TELEMETRY_PORT" --bind "$TELEMETRY_BIND" --stats "$STATS_FILE" \
+  "${radar_args[@]}" &
 overlay=$!
 sleep 0.3
 kill -0 "$overlay" 2>/dev/null || { echo "telemetry_overlay.py failed to start (is port $TELEMETRY_PORT in use?)" >&2; exit 1; }
@@ -49,8 +60,17 @@ m=video $PORT RTP/AVP 26
 a=rtpmap:26 JPEG/90000
 EOF
   input=(-protocol_whitelist file,udp,rtp -fflags nobuffer -flags low_delay -probesize 32 -analyzeduration 0 -i "$sdp")
-else
+elif [[ $VIDEO_IN == rtsp://* ]]; then
   input=(-rtsp_transport tcp -fflags nobuffer -flags low_delay -i "$VIDEO_IN")
+else
+  input=(-re -stream_loop -1 -i "$VIDEO_IN")   # a file, played as if live (for trying it out)
+fi
+if [[ -n $RADAR_IN && $RADAR_VIEW == beside ]]; then
+  if [[ $RADAR_IN == rtsp://* ]]; then
+    input+=(-rtsp_transport tcp -fflags nobuffer -flags low_delay -i "$RADAR_IN")
+  else
+    input+=(-re -stream_loop -1 -i "$RADAR_IN")
+  fi
 fi
 
 # Re-read the text every frame (reload=1); telemetry_overlay.py replaces it whole, never half-written.
@@ -59,17 +79,24 @@ fi
 # frame rate (and starve each frame of bits).
 overlay_filter="drawtext=textfile=$text:reload=1:expansion=none:font=monospace:fontsize=18:fontcolor=white:line_spacing=6"
 overlay_filter+=":box=1:boxcolor=black@0.6:boxborderw=6:x=10:y=10"
+# The radar's picture beside the camera's: both at HEIGHT, side by side; the radar's 5 pictures a second
+# are repeated to the camera's rate, and the text goes over the camera's part.
+if [[ -n $RADAR_IN && $RADAR_VIEW == beside ]]; then
+  vf=(-filter_complex "[0:v]scale=-2:$HEIGHT,format=yuv420p[cam];[1:v]scale=-2:$HEIGHT,format=yuv420p[radar];[cam][radar]hstack=inputs=2,$overlay_filter")
+else
+  vf=(-vf "$overlay_filter")
+fi
 h264=(-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -b:v "$BITRATE" -maxrate "$BITRATE"
       -bufsize "$BITRATE" -g "$FPS" -r "$FPS")
 
 case $OUT in
   rtmp://*|rtmps://*)
-    ffmpeg -hide_banner -loglevel warning -stats "${input[@]}" -vf "$overlay_filter" "${h264[@]}" -f flv "$OUT" ;;
+    ffmpeg -hide_banner -loglevel warning -stats "${input[@]}" "${vf[@]}" "${h264[@]}" -f flv "$OUT" ;;
   "")
-    ffmpeg -hide_banner -loglevel warning "${input[@]}" -vf "$overlay_filter" \
+    ffmpeg -hide_banner -loglevel warning "${input[@]}" "${vf[@]}" \
       -c:v rawvideo -pix_fmt yuv420p -r "$FPS" -f nut pipe:1 \
     | ffplay -hide_banner -loglevel warning -window_title "ESP32-CAM + telemetry" \
         -fflags nobuffer -flags low_delay -framedrop -sync ext -f nut -i - ;;
   *)
-    ffmpeg -hide_banner -loglevel warning -stats "${input[@]}" -vf "$overlay_filter" "${h264[@]}" "$OUT" ;;
+    ffmpeg -hide_banner -loglevel warning -stats "${input[@]}" "${vf[@]}" "${h264[@]}" "$OUT" ;;
 esac

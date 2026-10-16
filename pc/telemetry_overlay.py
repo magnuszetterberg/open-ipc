@@ -6,12 +6,17 @@ Telemetry: the ESP32-CAM's JSON messages on UDP (link.sh, or the base station, d
 Signal: the base station adds rssi_dbm, loss_pct and video_kbps to each message; on a PC receiving with
 link.sh, the receiving wfb_rx's latest RX_ANT and PKT lines (link.sh keeps them in /tmp/open-ipc-rx.stats).
 
+Radar: with --radar-port, the radar camera's telemetry (its own port, 5610 + its camera number) adds a line
+with what it finds: "RADAR moving at 2.31 m", or "RADAR nothing moving".
+
 Usage: telemetry_overlay.py --out FILE [--port 5610] [--bind 127.0.0.1] [--stats /tmp/open-ipc-rx.stats]
+                            [--radar-port 5612]
 --bind 0.0.0.0 for the base station, which sends over the LAN; link.sh delivers to 127.0.0.1.
 """
 import argparse
 import json
 import os
+import select
 import socket
 import time
 
@@ -43,7 +48,17 @@ def uptime(s):
     return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
 
 
-def compose(t, signal):
+def radar_line(r):
+    if r is None:
+        return "RADAR --  NO TELEMETRY"
+    if r.get("learning"):
+        return "RADAR learning the room"
+    if r.get("moving"):
+        return f"RADAR moving at {r.get('distance_m', 0):.2f} m"
+    return "RADAR nothing moving"
+
+
+def compose(t, signal, radar=None, with_radar=False):
     lines = []
     if t is None:
         lines.append("CAM --  NO TELEMETRY")
@@ -58,6 +73,10 @@ def compose(t, signal):
         rssi, loss, mbit = signal
         tx = f"  TX {t['tx_dbm']:.1f} dBm" if t and "tx_dbm" in t else ""
         lines.append(f"SIG {rssi} dBm  LOSS {loss:.1f}%  {mbit:.1f} Mbit/s{tx}")
+    if with_radar:
+        lines.append(radar_line(radar))
+    elif t is not None and t.get("radar"):   # this camera is the radar itself
+        lines.append(radar_line(t))
     return "\n".join(lines)
 
 
@@ -74,28 +93,37 @@ def main():
     ap.add_argument("--port", type=int, default=5610)
     ap.add_argument("--bind", default="127.0.0.1", help="address to listen on: 0.0.0.0 for the base station")
     ap.add_argument("--stats", default="/tmp/open-ipc-rx.stats")
+    ap.add_argument("--radar-port", type=int, help="the radar camera's telemetry port, for its finding")
     args = ap.parse_args()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((args.bind, args.port))
-    sock.settimeout(0.25)
+    radar_sock = None
+    if args.radar_port:
+        radar_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        radar_sock.bind((args.bind, args.radar_port))
+    socks = [s for s in (sock, radar_sock) if s]
 
     telemetry, telemetry_at = None, 0.0
+    radar, radar_at = None, 0.0
     last = None
     while True:
-        try:
-            data = sock.recv(2048)
-            telemetry, telemetry_at = json.loads(data), time.monotonic()
-        except socket.timeout:
-            pass
-        except ValueError:
-            pass  # not JSON: keep the last good message
+        for s in select.select(socks, [], [], 0.25)[0]:
+            try:
+                message = json.loads(s.recv(2048))
+            except ValueError:
+                continue  # not JSON: keep the last good message
+            if s is sock:
+                telemetry, telemetry_at = message, time.monotonic()
+            else:
+                radar, radar_at = message, time.monotonic()
         current = telemetry if time.monotonic() - telemetry_at <= STALE_S else None
+        current_radar = radar if time.monotonic() - radar_at <= STALE_S else None
         if current is not None and "rssi_dbm" in current:  # through the base station: signal included
             signal = (current["rssi_dbm"], current.get("loss_pct", 0.0), current.get("video_kbps", 0) / 1000)
         else:
             signal = read_signal(args.stats)
-        text = compose(current, signal)
+        text = compose(current, signal, current_radar, radar_sock is not None)
         if text != last:
             write_atomic(args.out, text)
             last = text
