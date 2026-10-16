@@ -152,7 +152,7 @@ esp32/
 
 - ESP-IDF is pinned to one release, chosen in M0 and written in `esp32/README.md`.
 - Outside code comes from the ESP Component Manager (`esp32-camera`, `libsodium`, `lan87xx`), with versions pinned in each project's `idf_component.yml`.
-- The Linux side keeps using the top-level scripts. `receiver.sh` gets a JPEG mode (`rtpjpegdepay ! jpegdec`) next to H.264. The burn-in script is a new top-level script, built on ffmpeg like `sender.sh`.
+- The Linux side keeps using its scripts, in `pc/`; `./ipc` at the repo root is the front door that runs them. `receiver.sh` gets a JPEG mode (`rtpjpegdepay ! jpegdec`) next to H.264. The burn-in script is a new script there, built on ffmpeg like `sender.sh`.
 
 ## Testing
 
