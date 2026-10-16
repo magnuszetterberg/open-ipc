@@ -1,0 +1,4 @@
+# Camera 2 of the base station (CAM=2 ./build.sh camera): video on radio port 2, telemetry on 0x10 + 2
+# (docs/DESIGN.md). Applied on top of sdkconfig.defaults.
+CONFIG_LINK_RADIO_PORT=2
+CONFIG_LINK_TELEMETRY_PORT=18

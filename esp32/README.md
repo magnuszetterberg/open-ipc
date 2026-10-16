@@ -85,6 +85,14 @@ ESPPORT=/dev/ttyUSB1 esp32/build.sh base flash
 esp32/monitor.sh /dev/ttyUSB1
 ```
 
+Each camera needs its own radio ports. `build.sh camera` builds camera 0; `CAM=1` and `CAM=2` build cameras 1 and 2 (`camera/sdkconfig.defaults.cam1`, `.cam2`), each in its own build folder and sdkconfig, so switching between them never mixes settings:
+
+```sh
+ESPPORT=/dev/ttyUSB0 esp32/build.sh camera flash          # camera 0: rtsp://<base station>:8554/cam0
+CAM=1 ESPPORT=/dev/ttyUSB0 esp32/build.sh camera flash    # camera 1: .../cam1
+CAM=2 ESPPORT=/dev/ttyUSB0 esp32/build.sh camera flash    # camera 2: .../cam2
+```
+
 To push a camera to the RTMP server with its telemetry burned in, on the host the telemetry goes to:
 
 ```sh
