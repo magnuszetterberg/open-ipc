@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "driver/uart.h"
+#include "driver/uart_vfs.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -302,10 +304,11 @@ static void receive_task(void *arg)
             radio->release(f);
         }
         // Video goes out as it arrives (send_rtp, jpeg_data); polling only accepts clients, reads their requests
-        // and sends what waited. Every 5 ms is plenty, and select() on every radio frame costs CPU.
+        // and sends what waited. select() costs 0.5 ms, sometimes 4 ms: every 5 ms that was 100 ms of each
+        // second, and a camera's burst of packets arriving meanwhile overflowed the receive slots. 20 ms.
         if (esp_timer_get_time() >= next_poll_us)
         {
-            next_poll_us = esp_timer_get_time() + 5000;
+            next_poll_us = esp_timer_get_time() + 20000;
             if (rtsp_up)
             {
                 rtsp.poll(0);
@@ -325,6 +328,11 @@ static void receive_task(void *arg)
 
 extern "C" void app_main(void)
 {
+    // The console through the UART driver: a log line goes into its buffer and out in the background.
+    // Without it, the stats lines kept the receive task waiting for the UART for 39 ms each second
+    // (115200 baud), long enough for the receive slots to fill and frames to be dropped.
+    ESP_ERROR_CHECK(uart_driver_install((uart_port_t)CONFIG_ESP_CONSOLE_UART_NUM, 256, 2048, 0, nullptr, 0));
+    uart_vfs_dev_use_driver(CONFIG_ESP_CONSOLE_UART_NUM);
     radio_config radio_cfg;
     radio_cfg.channel = CONFIG_LINK_CHANNEL;
     ESP_ERROR_CHECK(radio_start(radio_cfg));

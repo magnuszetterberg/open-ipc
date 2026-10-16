@@ -31,10 +31,11 @@ menu "wfb-ng link"
     config LINK_RX_SLOTS
         int "Received frames that can wait to be processed"
         range 4 64
-        default 8
+        default 10
         help
             Each costs about 1.5 KB of internal RAM. Three cameras and Ethernet leave little to spare on an
-            ESP32 without PSRAM (#20).
+            ESP32 without PSRAM (#20). A camera sends each JPEG as a burst of about 12 packets, which
+            8 slots didn't always hold.
 
 endmenu
 
