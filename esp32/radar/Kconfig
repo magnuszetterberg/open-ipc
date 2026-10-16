@@ -33,20 +33,40 @@ menu "wfb-ng link"
     config LINK_FEC_K
         int "FEC k (data packets per block)"
         range 1 32
+        default 1 if LINK_PAYLOAD_RADAR
         default 8
+        help
+            The radar sends one small packet per measurement: k = 1 sends each at once, as telemetry does.
 
     config LINK_FEC_N
         int "FEC n (data + FEC packets per block)"
         range 1 32
+        default 2 if LINK_PAYLOAD_RADAR
         default 12
+
+    choice LINK_PAYLOAD
+        prompt "What to send"
+        default LINK_PAYLOAD_RADAR
+
+        config LINK_PAYLOAD_RADAR
+            bool "The SR250's radar data"
+
+        config LINK_PAYLOAD_COUNTER
+            bool "Counter (link test)"
+            help
+                A numbered payload; esp32/tools/counter_check.py on the receiver reports any that go missing.
+
+    endchoice
 
     config LINK_COUNTER_RATE
         int "Counter payloads per second"
+        depends on LINK_PAYLOAD_COUNTER
         range 1 2000
         default 100
 
     config LINK_COUNTER_SIZE
         int "Counter payload size (bytes)"
+        depends on LINK_PAYLOAD_COUNTER
         range 32 1400
         default 400
         help
@@ -63,6 +83,21 @@ menu "wfb-ng link"
             bool "wifi_inject_frame (the data path)"
 
     endchoice
+
+    config RADIO_TX_CONTROL
+        hex "Frame tx_control (rate) on the command path"
+        depends on RADIO_TX_COMMAND
+        default 0x0
+        help
+            0: the firmware's choice, its lowest rate (1 Mbit/s). Bit 15 fixes the rate, and the rate
+            index sits from bit 16 up. RADIO_RATE_SWEEP finds which index is which.
+
+    config RADIO_RATE_SWEEP
+        bool "Step through the rate indexes (to find HT MCS 3)"
+        depends on RADIO_TX_COMMAND
+        help
+            Every 4 seconds the next tx_control, bit 15 and index 0 to 31, printed on the console. The
+            base station's stats line shows the rate each one gives on air.
 
 endmenu
 

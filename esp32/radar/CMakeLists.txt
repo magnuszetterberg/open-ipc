@@ -14,7 +14,7 @@ wfb_key_file(key_file ${CONFIG_WFB_KEY_FILE})
 set(key_inc ${CMAKE_CURRENT_BINARY_DIR}/generated/wfb_key.inc)
 generate_inc_file_for_target(app ${key_file} ${key_inc})
 
-target_sources(app PRIVATE src/main.cpp src/radio.cpp src/radio_nxp.c ../components/keys/keys.cpp)
+target_sources(app PRIVATE src/main.cpp src/radio.cpp src/radio_nxp.c src/radar.cpp src/uwb.c ../components/keys/keys.cpp)
 target_include_directories(app PRIVATE ../components/keys/include)
 # Zephyr links only its own tree's libraries by itself
 target_link_libraries(app PRIVATE wfb_core sodium)

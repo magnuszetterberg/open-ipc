@@ -18,6 +18,11 @@
 
 #include "wifi.h"
 #include "wlan.h"
+#if CONFIG_RADIO_TX_COMMAND
+#include "mlan_api.h"
+#include "wifi-imu.h"
+#include "wifi-internal.h"
+#endif
 
 #define WFB_HEADER 24   // frame control, duration, three addresses, sequence control
 
@@ -30,6 +35,41 @@
 #else
 // One of the driver's 1536-byte buffers, less its own headers in front of the frame
 #define HOST_FRAME_MAX 1400
+#endif
+
+uint32_t radio_nxp_tx_control = CONFIG_RADIO_TX_CONTROL;
+
+#if CONFIG_RADIO_TX_COMMAND
+// Adapted from wifi_mgmtframe_tx_cfg() in hal_nxp's mcux/middleware/wifi_nxp/wifidriver/mlan_api.c
+// (BSD-3-Clause, NXP), at hal_nxp commit 7554bc0f6f6c284972eba7b2c17b16fbb9cc0ad0 (Zephyr v4.4.2): the same
+// firmware command, with the frame's tx_control set (TXPD_TXRATE_ENABLE and a rate) instead of left at 0,
+// where the firmware sends at its lowest rate, 1 Mbit/s. wlan_mgmtframe_tx_cfg()'s checks (monitor mode on,
+// no network joined) are radio_nxp_start()'s.
+static int send_command(const wlan_host_tx_frame_params_t *frame)
+{
+    static mlan_ds_misc_tx_frame tx_frame;  // static: over 500 bytes, and there is one sender
+    (void)memset(&tx_frame, 0, sizeof(tx_frame));
+    uint8_t *buf = tx_frame.tx_buf;
+    uint32_t pkt_type = MRVL_PKT_TYPE_MGMT_FRAME;
+    (void)memcpy(buf, &pkt_type, sizeof(pkt_type));
+    (void)memcpy(buf + sizeof(pkt_type), &radio_nxp_tx_control, sizeof(radio_nxp_tx_control));
+    (void)memcpy(buf + TXRX_MGMT_FRAME_HEADER_SIZE, frame, sizeof(frame->frm_len) + frame->frm_len);
+    tx_frame.data_len = sizeof(frame->frm_len) + TXRX_MGMT_FRAME_HEADER_SIZE + frame->frm_len;
+    tx_frame.buf_type = MLAN_BUF_TYPE_RAW_DATA;
+    tx_frame.priority = 7;
+
+    (void)wifi_get_command_lock();
+    HostCmd_DS_COMMAND *cmd = wifi_get_command_buffer();
+    (void)memset(cmd, 0x00, sizeof(HostCmd_DS_COMMAND));
+    if (wlan_ops_sta_prepare_cmd((mlan_private *)mlan_adap->priv[0], HostCmd_CMD_802_11_TX_FRAME,
+                                 HostCmd_ACT_GEN_SET, 0, NULL, &tx_frame, cmd) != MLAN_STATUS_SUCCESS)
+    {
+        wifi_put_command_lock();
+        return -WM_FAIL;
+    }
+    (void)wifi_wait_for_cmdresp(NULL);  // hands the command lock back
+    return wm_wifi.cmd_resp_status;
+}
 #endif
 
 size_t radio_nxp_max_body(void)
@@ -99,7 +139,7 @@ int radio_nxp_send(const uint8_t *header, const uint8_t *body, size_t body_size)
     memcpy(frame->payload, body, body_size);
 
 #if CONFIG_RADIO_TX_COMMAND
-    return wlan_mgmtframe_tx_cfg(frame);
+    return send_command(frame);
 #else
     return wifi_inject_frame(WLAN_BSS_TYPE_STA, buf, sizeof(uint16_t) + frame->frm_len);
 #endif

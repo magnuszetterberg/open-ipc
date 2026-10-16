@@ -1,0 +1,18 @@
+description: |
+  NXP Trimension SR250 UWB radar on SPI (the SR250-ARD shield), driven by the radar firmware's own UCI
+  client (src/uwb.c).
+
+compatible: "nxp,sr250"
+
+include: [spi-device.yaml]
+
+properties:
+  irq-gpios:
+    type: phandle-array
+    required: true
+    description: High while the SR250 has a message for the host.
+
+  reset-gpios:
+    type: phandle-array
+    required: true
+    description: The SR250's RSTN line; low resets it.

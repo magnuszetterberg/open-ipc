@@ -8,7 +8,9 @@
 #include <zephyr/sys/printk.h>
 
 #include "keys.hpp"
+#include "radar.hpp"
 #include "radio.hpp"
+#include "radio_nxp.h"
 #include "wfb_tx.hpp"
 
 static uint64_t now_us()
@@ -19,6 +21,15 @@ static uint64_t now_us()
 int main(void)
 {
     printk("radar camera, FRDM-RW612, Zephyr %s\n", KERNEL_VERSION_STRING);
+
+#if CONFIG_LINK_PAYLOAD_RADAR
+    // The SR250 first, before WiFi starts
+    if (radar_start() != 0)
+    {
+        printk("radar: not started\n");
+        return 0;
+    }
+#endif
 
     radio_config radio_cfg;
     radio_cfg.channel = CONFIG_LINK_CHANNEL;
@@ -47,6 +58,47 @@ int main(void)
     printk("wfb-ng link 0x%06x port %d, FEC %d/%d, max payload %u\n", CONFIG_LINK_ID, CONFIG_LINK_RADIO_PORT,
            CONFIG_LINK_FEC_K, CONFIG_LINK_FEC_N, (unsigned)tx.max_payload());
 
+#if CONFIG_LINK_PAYLOAD_RADAR
+    // Each measurement goes out as one payload (radar_pack)
+    uint64_t next_radar_stats = now_us() + 1000000;
+    radar_stats last_counts;
+    uint16_t seq = 0;
+    uint32_t sent = 0, unpacked = 0, send_errors = 0;
+    static uint8_t payload[WFB_MAX_PACKET];
+    for (;;)
+    {
+        radar_cirs cirs;
+        if (radar_next(&cirs, 1000))
+        {
+            size_t n = radar_pack(cirs, seq++, payload, MIN(sizeof(payload), tx.max_payload()));
+            if (n == 0)
+            {
+                unpacked += 1;
+            }
+            else if (tx.send(payload, n, now_us()) == WFB_OK)
+            {
+                sent += 1;
+            }
+            else
+            {
+                send_errors += 1;
+            }
+        }
+        if (now_us() >= next_radar_stats)
+        {
+            next_radar_stats += 1000000;
+            printk("radar: %lu measurements/s, %lu sent (%lu frames on air), %lu unreadable, %lu send errors, "
+                   "%lu other UCI, %lu SPI errors\n",
+                   (unsigned long)(radar_counts.notifications - last_counts.notifications), (unsigned long)sent,
+                   (unsigned long)radio.frames, (unsigned long)unpacked, (unsigned long)send_errors,
+                   (unsigned long)(radar_counts.other - last_counts.other),
+                   (unsigned long)(radar_counts.errors - last_counts.errors));
+            last_counts = radar_counts;
+            sent = unpacked = send_errors = 0;
+            radio.frames = 0;
+        }
+    }
+#else
     // Payload: "rw612 counter <n>" then padding to CONFIG_LINK_COUNTER_SIZE (at most the max payload), so
     // esp32/tools/counter_check.py on the receiver can spot gaps.
     static uint8_t payload[CONFIG_LINK_COUNTER_SIZE];
@@ -76,6 +128,15 @@ int main(void)
         if (now >= next_stats_us)
         {
             next_stats_us += 1000000;
+#if CONFIG_RADIO_RATE_SWEEP
+            static uint32_t seconds = 0;
+            if (seconds++ % 4 == 0)
+            {
+                uint32_t index = (seconds / 4) % 32;
+                radio_nxp_tx_control = (1u << 15) | (index << 16);
+                printk("rate sweep: tx_control 0x%08x (index %u)\n", radio_nxp_tx_control, (unsigned)index);
+            }
+#endif
             printk("counter %lu: %lu payloads/s, %lu frames/s, %lu dropped by WiFi (%d), %lu errors\n",
                    (unsigned long)counter, (unsigned long)sent, (unsigned long)(radio.frames - frames),
                    (unsigned long)(radio.dropped - dropped), radio.last_error, (unsigned long)errors);
@@ -96,4 +157,5 @@ int main(void)
             k_yield();
         }
     }
+#endif
 }
