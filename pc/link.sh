@@ -61,6 +61,14 @@ DRONE_KEY=$(key_file drone.key)
 
 monitor() {
   nmcli device set "$1" managed no 2>/dev/null || true
+  # NetworkManager's "WiFi off" (and airplane mode) blocks every WiFi radio; lift it for this adapter only
+  local phy idx
+  phy=$(cat "/sys/class/net/$1/phy80211/name" 2>/dev/null || true)
+  for idx in /sys/class/rfkill/rfkill*; do
+    [[ -n $phy && $(cat "$idx/name" 2>/dev/null) == "$phy" && $(cat "$idx/soft" 2>/dev/null) == 1 ]] || continue
+    echo "$1 was switched off (rfkill); switching it on"
+    rfkill unblock "${idx##*rfkill}"
+  done
   ip link set "$1" down
   iw dev "$1" set type monitor
   ip link set "$1" up
