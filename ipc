@@ -8,6 +8,8 @@ STATE=${XDG_STATE_HOME:-$HOME/.local/state}/open-ipc
 BASE_FILE=$STATE/base-address       # the base station's address, saved by "flash base"
 BOARDS_FILE=$STATE/boards           # which board was flashed in which USB socket, for "log"
 
+source ./wifi.sh                    # which WiFi adapter sends or receives, and which keys (shared with link.sh)
+
 usage() {
   cat <<'END'
 open-ipc: what do you want to do?
@@ -16,17 +18,22 @@ Set up the boards (once each):
   ./ipc flash camera N     a camera, N = 0, 1 or 2: plug it in when asked
   ./ipc flash base         the base station (ESP32-POE): plug it in when asked
 
-Receive with the base station (up to 3 cameras, anywhere on the LAN):
+Receive the cameras with the base station (up to 3 cameras, anywhere on the network):
   ./ipc view               every camera, live, in a browser
   ./ipc stream N URL       camera N to a video server (rtmp://...) with its telemetry burned in;
                            or a file name (cam0.mkv) to record, or nothing for a window
 
-Or receive with this PC's own WiFi adapter (camera 0 only, no base station):
-  ./ipc receive            camera 0 in a window
+Or with this PC's own WiFi adapter (no base station):
+  ./ipc receive            what the adapter hears, in a window: camera 0, or a PC running ./ipc send
   ./ipc receive URL        camera 0 to a video server (rtmp://...) with its telemetry burned in;
                            or a file name (cam0.mkv) to record
 
+PC to PC:
+  ./ipc send               this PC's webcam over its WiFi adapter (the other PC runs ./ipc receive)
+
 Other:
+  ./ipc keys               your own link keys instead of the shared test keys (then flash the boards again)
+  ./ipc test               check the software on this PC (no boards needed)
   ./ipc log                what a board plugged into this PC is doing
   ./ipc setup              first time on a new PC: installs the tools
 
@@ -115,6 +122,7 @@ flash_camera() {
   CAM=$n ESPPORT=$port esp32/build.sh camera flash >"$STATE/flash.log" 2>&1 ||
     die "flashing failed; the details are in $STATE/flash.log"
   remember_board "$port" "camera $n"
+  say "  $(key_status)"
   say "Checking that it sends video..."
   log=$(boot_log "$port" 15)
   if grep -q "wfb-ng link .* port $n," <<<"$log" && grep -qE 'video: [1-9][0-9]* fps' <<<"$log"; then
@@ -143,6 +151,7 @@ flash_base() {
   ESPPORT=$port esp32/build.sh base flash >"$STATE/flash.log" 2>&1 ||
     die "flashing failed; the details are in $STATE/flash.log"
   remember_board "$port" "base station"
+  say "  $(key_status)"
   say "Checking that it starts..."
   log=$(boot_log "$port" 25)
   addr=$(grep -oP 'eth: address \K[0-9.]+' <<<"$log" | tail -1 || true)
@@ -155,10 +164,7 @@ flash_base() {
   say "  web page:  http://$addr/          (./ipc view)"
   say "  RTSP:      rtsp://$addr:8554/cam0 ... cam2"
   say "  telemetry: to this PC ($to), UDP 5610-5612"
-  if command -v ufw >/dev/null && systemctl is-active -q ufw 2>/dev/null; then
-    say "  If you haven't yet, let it through this PC's firewall (once):"
-    say "    sudo ufw allow from $addr to any port 5600:5612 proto udp"
-  fi
+  open_firewall "$addr"
   grep -oE 'cam[0-2]: [0-9]+ frames \(rssi -?[0-9]+\)' <<<"$log" | sort -u -k1,1 | sed 's/^/  hears /' || true
 }
 
@@ -178,63 +184,58 @@ pick_port() {
   esac
 }
 
-# WiFi adapters that receive wfb-ng in monitor mode (README: which WiFi adapter). Intel (iwlwifi) can't.
-GOOD_RX_DRIVERS="rt2800usb rtl88xxau rtl88XXau 88XXau rtl8812au rtl88x2eu 8812eu ath9k_htc"
-
-driver_of() {
-  basename "$(readlink -f "/sys/class/net/$1/device/driver" 2>/dev/null)"
-}
-
-# The WiFi adapter to receive with: one that can, preferring the drivers known to work. Prints its name.
-pick_receiver() {
-  local i name candidates=() good=()
-  for i in /sys/class/net/*; do
-    [[ -d $i/wireless || -d $i/phy80211 ]] || continue
-    name=$(basename "$i")
-    [[ $(driver_of "$name") == iwlwifi ]] && continue
-    candidates+=("$name")
-    [[ " $GOOD_RX_DRIVERS " == *" $(driver_of "$name") "* ]] && good+=("$name")
-  done
-  if ((${#good[@]} == 1)); then
-    printf '%s\n' "${good[0]}"
-  elif ((${#candidates[@]} == 1)); then
-    say "${candidates[0]}'s adapter isn't one known to receive; if nothing arrives, see the README (which WiFi adapter)." >&2
-    printf '%s\n' "${candidates[0]}"
-  elif ((${#candidates[@]} == 0)); then
-    die "this PC has no WiFi adapter that can receive (Intel cards can't). Plug in one that can (a Ralink RT5572,
-     RTL8812AU/EU or AR9271 USB adapter), or receive with the base station instead (./ipc flash base)."
+# Which keys the boards and the link use, in a few words.
+key_status() {
+  if [[ $(key_file gs.key) == */own/* ]]; then
+    echo "keys: your own (keys/own)"
   else
-    say "More than one WiFi adapter could receive:" >&2
-    local n=1
-    for i in "${candidates[@]}"; do
-      say "  $n) $i ($(driver_of "$i"))" >&2
-      n=$((n + 1))
-    done
-    read -rp "Which one? " n
-    [[ $n =~ ^[0-9]+$ && $n -ge 1 && $n -le ${#candidates[@]} ]] || die "no such adapter"
-    printf '%s\n' "${candidates[$((n - 1))]}"
+    echo "keys: the shared test keys: anyone with this repo can watch (./ipc keys makes your own)"
   fi
 }
 
-# Camera 0 straight to this PC's WiFi adapter, no base station: link.sh rx and a window (rx.sh), or burnin.sh.
-receive() {
-  local out=$1 iface ok
-  iface=$(pick_receiver)
-  say "Receiving camera 0 with $iface ($(driver_of "$iface"))."
-  if ip -4 -o addr show dev "$iface" 2>/dev/null | grep -q inet; then
-    say "  $iface is this PC's network connection right now. Receiving takes it over, so the PC is off"
-    say "  that network until you stop (Ctrl-C gives it back)."
+# The base station's telemetry and video reach this PC only if its firewall lets them in.
+open_firewall() {
+  local addr=$1 ok
+  command -v ufw >/dev/null && systemctl is-active -q ufw 2>/dev/null || return 0
+  local rule="sudo ufw allow from $addr to any port 5600:5612 proto udp"
+  if [[ -t 0 ]]; then
+    read -rp "  Let the base station's telemetry through this PC's firewall? It asks for your password. [Y/n] " ok
+    if [[ $ok != [nN]* ]]; then
+      $rule >/dev/null && say "  firewall: open for $addr" && return 0
+    fi
+  fi
+  say "  To let it through this PC's firewall later: $rule"
+}
+
+# The WiFi adapter for a role (rx or tx): TX_IF/RX_IF if set, else the best one here (wifi.sh). Warns, and
+# asks, when it's this PC's network connection: monitor mode takes it over until Ctrl-C.
+adapter_for() {
+  local role=$1 iface ok named=RX_IF
+  [[ $role == tx ]] && named=TX_IF
+  iface=${!named:-$(wifi_pick "$role")}
+  [[ -n $iface ]] || die "$(wifi_none "$role")"
+  [[ -e /sys/class/net/$iface ]] || die "no WiFi interface $iface"
+  say "Using $iface ($(wifi_driver "$iface")); another one: $named=<interface> ./ipc ..." >&2
+  if wifi_in_use "$iface"; then
+    say "  $iface is this PC's network connection right now: it is off that network until you stop." >&2
     if [[ -t 0 ]]; then
       read -rp "  Go ahead? [y/N] " ok
       [[ $ok == [yY]* ]] || exit 1
     fi
   fi
+  printf '%s\n' "$iface"
+}
+
+# What this PC's own adapter hears, no base station: link.sh rx and a window (rx.sh, which tells camera
+# JPEG from webcam H.264 by itself), or camera 0 with its telemetry burned in, to a server or a file.
+receive() {
+  local out=$1 iface
+  iface=$(adapter_for rx)
+  say "$(key_status)"
   say "It asks for your password: the adapter is switched to monitor mode. Ctrl-C stops."
   if [[ -z $out ]]; then
-    RX_IF=$iface VIDEO=jpeg exec ./rx.sh
+    RX_IF=$iface VIDEO=auto exec ./rx.sh
   fi
-
-  # To a server or a file, telemetry burned in: as rx.sh runs the link, with burnin.sh instead of the window.
   ./build.sh
   sudo -v
   while sleep 60; do sudo -n -v; done &
@@ -253,6 +254,70 @@ stop_receive() {
   sudo pkill -TERM -f '[l]ink.sh rx' || true  # [l] keeps pkill from matching its own sudo
   if [[ -n ${RECEIVE_LINK:-} ]]; then wait "$RECEIVE_LINK" 2>/dev/null || true; fi
   kill "${RECEIVE_KEEPALIVE:-}" 2>/dev/null || true
+}
+
+# This PC's webcam (a test pattern if it has none) over its own adapter: tx.sh.
+send() {
+  local iface source=webcam
+  iface=$(adapter_for tx)
+  if [[ ! -e ${DEVICE:-/dev/video0} ]]; then
+    say "No webcam (${DEVICE:-/dev/video0}): sending a test pattern."
+    source=test
+  fi
+  say "$(key_status)"
+  say "It asks for your password: the adapter is switched to monitor mode. On the other PC: ./ipc receive. Ctrl-C stops."
+  TX_IF=$iface SOURCE=$source exec ./tx.sh
+}
+
+# Your own key pair in keys/own/ (never committed, R9): the boards get it when flashed next, link.sh at once.
+keys() {
+  local own=keys/own password ok
+  if [[ ${1:-} == reset ]]; then
+    rm -rf "$own"
+    say "Back to the shared test keys. Flash every board again (./ipc flash ...) so they match."
+    return
+  fi
+  if [[ -d $own ]]; then
+    if [[ -t 0 ]]; then
+      read -rp "You already have your own keys; boards flashed with them stop working with new ones. Replace them? [y/N] " ok
+      [[ $ok == [yY]* ]] || exit 1
+    else
+      die "you already have your own keys in $own; ./ipc keys reset first to replace them"
+    fi
+  fi
+  [[ -x wfb-ng/wfb_keygen ]] || ./build.sh || die "wfb-ng isn't built: install what it lists above, then ./ipc keys again"
+  if [[ -t 0 ]]; then
+    say "A password gives the same keys on every PC you type it on; none gives a random pair, which you copy."
+    read -rsp "Password (Enter for random): " password
+    say ""
+  else
+    read -r password || true
+  fi
+  mkdir -p "$own"
+  if [[ -n $password ]]; then
+    (cd "$own" && ../../wfb-ng/wfb_keygen "$password" >/dev/null 2>&1)
+  else
+    (cd "$own" && ../../wfb-ng/wfb_keygen >/dev/null 2>&1)
+  fi
+  chmod 600 "$own"/*.key
+  say "Your own keys are in $own/ (not in git; keep them private). Now:"
+  say "  1. flash every board again: ./ipc flash camera N, ./ipc flash base"
+  if [[ -n $password ]]; then
+    say "  2. on any other PC that sends or receives over its own adapter: ./ipc keys, same password"
+  else
+    say "  2. any other PC that sends or receives over its own adapter needs a copy of $own/"
+  fi
+}
+
+# The software's own tests, on this PC: the wfb-ng core, RTP/JPEG, RTSP and the web view (esp32/test.sh).
+run_tests() {
+  say "Checking the software on this PC (a minute or so; no boards needed)..."
+  if esp32/test.sh >"$STATE/test.log" 2>&1; then
+    say "All good: $(grep -oE '[0-9]+ tests? failed out of [0-9]+' "$STATE/test.log" | grep -oE '[0-9]+$') checks passed."
+  else
+    grep -E 'CHECK failed|Failed|\*\*\*' "$STATE/test.log" | head -20
+    die "some checks failed; everything is in $STATE/test.log"
+  fi
 }
 
 # First time on a PC: what flashing needs, then the extras, each saying what it's for.
@@ -314,6 +379,9 @@ case "${1:-} ${2:-}" in
     say "   ./ipc flash base sets it up for this PC.)"
     VIDEO_IN=rtsp://$addr:8554/cam$n TELEMETRY_PORT=$((5610 + n)) exec ./burnin.sh "${3:-}" ;;
   "receive "*) receive "${2:-}" ;;
+  "send "*) send ;;
+  "keys "*) keys "${2:-}" ;;
+  "test "*) run_tests ;;
   "log "*) [[ -n $port ]] || port=$(pick_port); exec esp32/monitor.sh "$port" -t ;;
   "setup "*) setup ;;
   " ") usage ;;

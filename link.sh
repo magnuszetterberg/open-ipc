@@ -5,7 +5,8 @@
 #   sudo ./link.sh tx     transmitter only (two-machine setup)
 #   sudo ./link.sh rx     receiver only
 #
-# In tx/rx mode, if TX_IF/RX_IF doesn't exist, the first WiFi interface is used.
+# The adapters: TX_IF / RX_IF if given, else the ones wifi.sh picks for each role (Intel never receives).
+# The keys: your own pair in keys/own/ (./ipc keys) if there is one, else the repo's test keys.
 #
 # Video in:  UDP 127.0.0.1:5602  (PORT=5602 ./sender.sh)
 # Video out: UDP 127.0.0.1:5600  (./receiver.sh)
@@ -16,8 +17,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 ROLE=${1:-${ROLE:-both}}   # both | tx | rx
-TX_IF=${TX_IF:-wlan0}       # built-in Intel card: can send (tested on 2.4 GHz), can't receive
-RX_IF=${RX_IF:-wlan1}       # Ralink RT5572 USB stick: receives well
+TX_IF=${TX_IF:-}            # empty: picked below (wifi.sh)
+RX_IF=${RX_IF:-}
 CHANNEL=${CHANNEL:-6}       # 2.4 GHz: Intel cards won't transmit on 5 GHz channel 36 ("No IR")
 MCS=${MCS:-3}               # HT20 MCS3 = 26 Mbit/s on air
 FEC_K=${FEC_K:-8}           # 8 data packets ...
@@ -32,17 +33,31 @@ WFB=wfb-ng
 
 [[ $EUID -eq 0 ]] || { echo "run with sudo" >&2; exit 1; }
 
-# $1 if that interface exists, else the first WiFi interface on this machine.
-pick() {
-  if [[ -e /sys/class/net/$1 ]]; then echo "$1"; else iw dev | awk '/Interface/ {print $2; exit}'; fi
+source ./wifi.sh
+
+# An adapter for a role: the one named, if it exists, else wifi.sh's pick. $2: one the other end uses.
+adapter() {
+  local role=$1 named=$2 other=${3:-} found
+  if [[ -n $named ]]; then
+    [[ -e /sys/class/net/$named ]] || { echo "no WiFi interface $named" >&2; exit 1; }
+    echo "$named"
+    return
+  fi
+  found=$(wifi_pick "$role" "$other")
+  [[ -n $found ]] || { echo "$(wifi_none "$role")" >&2; exit 1; }
+  echo "$found"
 }
 
 case $ROLE in
-  both) ifaces=("$TX_IF" "$RX_IF") ;;
-  tx)   TX_IF=$(pick "$TX_IF"); ifaces=("$TX_IF") ;;
-  rx)   RX_IF=$(pick "$RX_IF"); ifaces=("$RX_IF") ;;
+  both) RX_IF=$(adapter rx "$RX_IF"); TX_IF=$(adapter tx "$TX_IF" "$RX_IF"); ifaces=("$TX_IF" "$RX_IF") ;;
+  tx)   TX_IF=$(adapter tx "$TX_IF"); ifaces=("$TX_IF") ;;
+  rx)   RX_IF=$(adapter rx "$RX_IF"); ifaces=("$RX_IF") ;;
   *)    echo "unknown ROLE: $ROLE" >&2; exit 1 ;;
 esac
+for i in "${ifaces[@]}"; do echo "using $i ($(wifi_driver "$i"))"; done
+GS_KEY=$(key_file gs.key)
+DRONE_KEY=$(key_file drone.key)
+[[ $GS_KEY == */own/* ]] && echo "keys: your own (keys/own)" || echo "keys: the repo's shared test keys (./ipc keys makes your own)"
 
 monitor() {
   nmcli device set "$1" managed no 2>/dev/null || true
@@ -75,19 +90,19 @@ done
 if [[ $ROLE != tx ]]; then
   iw dev "$RX_IF" info | grep -E 'Interface|type|channel'
   # Its stats lines also go to $STATS_FILE: the latest RX_ANT (signal) and PKT (loss) pair, for burn-in.
-  "$WFB/wfb_rx" -K keys/gs.key -p 0 -c 127.0.0.1 -u "$OUT_PORT" "$RX_IF" \
+  "$WFB/wfb_rx" -K "$GS_KEY" -p 0 -c 127.0.0.1 -u "$OUT_PORT" "$RX_IF" \
     > >(tee >(awk -v f="$STATS_FILE" '/\tRX_ANT\t/ {ant = $0} /\tPKT\t/ {print ant > f; print > f; close(f)}') \
         | sed -u 's/^/[rx] /') 2>&1 &
   pids+=($!)
   # Telemetry: its per-second stats would crowd the terminal, so only its errors show.
-  "$WFB/wfb_rx" -K keys/gs.key -p "$TELEMETRY_RADIO_PORT" -c 127.0.0.1 -u "$TELEMETRY_PORT" "$RX_IF" \
+  "$WFB/wfb_rx" -K "$GS_KEY" -p "$TELEMETRY_RADIO_PORT" -c 127.0.0.1 -u "$TELEMETRY_PORT" "$RX_IF" \
     > /dev/null 2> >(sed -u 's/^/[telemetry] /') &
   pids+=($!)
 fi
 if [[ $ROLE != rx ]]; then
   iw dev "$TX_IF" set txpower fixed "$TX_POWER" 2>/dev/null || echo "note: $TX_IF ignored the txpower setting"
   iw dev "$TX_IF" info | grep -E 'Interface|type|channel|txpower'
-  "$WFB/wfb_tx" -K keys/drone.key -p 0 -u "$IN_PORT" -k "$FEC_K" -n "$FEC_N" -B 20 -M "$MCS" "$TX_IF" > >(sed -u 's/^/[tx] /') 2>&1 &
+  "$WFB/wfb_tx" -K "$DRONE_KEY" -p 0 -u "$IN_PORT" -k "$FEC_K" -n "$FEC_N" -B 20 -M "$MCS" "$TX_IF" > >(sed -u 's/^/[tx] /') 2>&1 &
   pids+=($!)
 fi
 
