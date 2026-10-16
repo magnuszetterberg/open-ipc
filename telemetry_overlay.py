@@ -6,7 +6,8 @@ Telemetry: the ESP32-CAM's JSON messages on UDP (link.sh, or the base station, d
 Signal: the base station adds rssi_dbm, loss_pct and video_kbps to each message; on the NUC, the receiving
 wfb_rx's latest RX_ANT and PKT lines (link.sh keeps them in /tmp/open-ipc-rx.stats).
 
-Usage: telemetry_overlay.py --out FILE [--port 5610] [--stats /tmp/open-ipc-rx.stats]
+Usage: telemetry_overlay.py --out FILE [--port 5610] [--bind 127.0.0.1] [--stats /tmp/open-ipc-rx.stats]
+--bind 0.0.0.0 for the base station, which sends over the LAN; link.sh delivers to 127.0.0.1.
 """
 import argparse
 import json
@@ -71,11 +72,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", required=True)
     ap.add_argument("--port", type=int, default=5610)
+    ap.add_argument("--bind", default="127.0.0.1", help="address to listen on: 0.0.0.0 for the base station")
     ap.add_argument("--stats", default="/tmp/open-ipc-rx.stats")
     args = ap.parse_args()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(("127.0.0.1", args.port))
+    sock.bind((args.bind, args.port))
     sock.settimeout(0.25)
 
     telemetry, telemetry_at = None, 0.0
