@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fetch and build wfb-ng if it isn't built yet. Run as your normal user (not sudo).
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."                       # the repo root: wfb-ng is a submodule there
 
 [[ -x wfb-ng/wfb_rx && -x wfb-ng/wfb_tx ]] && exit 0
 

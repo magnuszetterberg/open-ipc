@@ -29,7 +29,7 @@ OUT_PORT=${OUT_PORT:-5600}
 TELEMETRY_PORT=${TELEMETRY_PORT:-5610}
 TELEMETRY_RADIO_PORT=16      # ESP32-CAM 0's telemetry (docs/DESIGN.md: 0x10 + camera index)
 STATS_FILE=${STATS_FILE:-/tmp/open-ipc-rx.stats}
-WFB=wfb-ng
+WFB=../wfb-ng
 
 [[ $EUID -eq 0 ]] || { echo "run with sudo" >&2; exit 1; }
 
