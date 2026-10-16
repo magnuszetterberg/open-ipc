@@ -235,7 +235,9 @@ extern "C" void app_main(void)
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
 #if CONFIG_BASE_ETHERNET
-    if (eth_start(eth_config(), 15000) == ESP_OK)
+    // Serve even without an address yet: DHCP keeps trying, so a cable plugged in late still works.
+    esp_err_t eth_err = eth_start(eth_config(), 15000);
+    if (eth_err == ESP_OK || eth_err == ESP_ERR_TIMEOUT)
     {
         rtsp_config rtsp_cfg;
         rtsp_cfg.port = CONFIG_BASE_RTSP_PORT;

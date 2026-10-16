@@ -90,7 +90,7 @@ esp_err_t eth_start(const eth_config &config, int timeout_ms)
 
     if (!(xEventGroupWaitBits(events, GOT_IP, pdFALSE, pdTRUE, pdMS_TO_TICKS(timeout_ms)) & GOT_IP))
     {
-        ESP_LOGE(TAG, "no address from DHCP within %d ms: is the cable in?", timeout_ms);
+        ESP_LOGW(TAG, "no address from DHCP within %d ms (is the cable in?); still trying", timeout_ms);
         return ESP_ERR_TIMEOUT;
     }
     return ESP_OK;

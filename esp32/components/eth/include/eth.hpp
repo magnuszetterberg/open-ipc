@@ -19,7 +19,8 @@ struct eth_config
 };
 
 // Starts Ethernet with DHCP and waits up to timeout_ms for an address. Call after radio_start(),
-// which creates the default event loop.
+// which creates the default event loop. ESP_ERR_TIMEOUT: Ethernet runs but has no address yet (cable
+// in late, a slow DHCP server); DHCP keeps trying, and sockets opened now work once it has one.
 esp_err_t eth_start(const eth_config &config, int timeout_ms);
 
 // Times the Ethernet link went down since it first came up: a sign of an unstable RMII clock, which
