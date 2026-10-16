@@ -168,6 +168,32 @@ pick_port() {
   esac
 }
 
+# First time on a PC: what flashing needs, then the extras, each saying what it's for.
+setup() {
+  if [[ ! -f wfb-ng/src/wifibroadcast.hpp ]]; then
+    say "Fetching wfb-ng (the firmware is built from its code)..."
+    git submodule update --init --depth 1 wfb-ng
+  fi
+  say "Installing the ESP32 tools (ESP-IDF, about 2 GB, 10-20 minutes the first time)..."
+  esp32/setup.sh || die "the ESP32 tools aren't installed: install what it lists above, then run ./ipc setup again"
+
+  say ""
+  say "Extras:"
+  if command -v ffmpeg >/dev/null; then
+    say "  ffmpeg: there (./ipc stream)"
+  else
+    say "  ffmpeg: missing, needed by ./ipc stream. Install the 'ffmpeg' package."
+  fi
+  if ./build.sh >"$STATE/wfb-ng-build.log" 2>&1; then
+    say "  wfb-ng: built (the PC-to-PC radio link, tx.sh and rx.sh)"
+  else
+    say "  wfb-ng: not built; only the PC-to-PC radio link (tx.sh, rx.sh) needs it. To build it:"
+    sed 's/^/    /' "$STATE/wfb-ng-build.log"
+  fi
+  say ""
+  say "Ready. Next: ./ipc flash camera 0 (or ./ipc flash base)."
+}
+
 open_url() {
   say "$1"
   if command -v xdg-open >/dev/null; then
@@ -201,7 +227,7 @@ case "${1:-} ${2:-}" in
     say "   ./ipc flash base sets it up for this PC.)"
     VIDEO_IN=rtsp://$addr:8554/cam$n TELEMETRY_PORT=$((5610 + n)) exec ./burnin.sh "${3:-}" ;;
   "log "*) [[ -n $port ]] || port=$(pick_port); exec esp32/monitor.sh "$port" -t ;;
-  "setup "*) ./build.sh && esp32/setup.sh ;;
+  "setup "*) setup ;;
   " ") usage ;;
   *) usage; exit 1 ;;
 esac

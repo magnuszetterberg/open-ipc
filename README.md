@@ -19,6 +19,16 @@ One command, `./ipc`, does the everyday things. Run it on its own to see the lis
 | see what a plugged-in board is doing | `./ipc log` |
 | first time on a new PC | `./ipc setup` |
 
+**On a fresh computer** (Linux), once:
+
+```sh
+git clone --recursive https://github.com/magnuszetterberg/open-ipc.git   # install git first
+cd open-ipc
+./ipc setup
+```
+
+`./ipc setup` installs the ESP32 tools into your home folder (about 2 GB, 10–20 minutes the first time; no sudo). If something is missing it says what, with the install command for Arch, Debian/Ubuntu and Fedora: install it and run `./ipc setup` again. If it asks you to join a group (`uucp` or `dialout`), do that and log out and back in, or flashing can't open the USB port.
+
 Flashing finds the board's USB port by itself, checks the board starts, and says what to do next. After flashing, a camera only needs power from any USB charger. Use a USB data cable: with a charge-only cable no port appears. The rest of this README covers the original PC-to-PC link and how everything works.
 
 ## Quick start: the PC-to-PC link
