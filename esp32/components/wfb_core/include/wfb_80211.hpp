@@ -13,7 +13,7 @@
 // filter and Receiver::loop_iter in rx.cpp (unframing), at submodule commit
 // 59adeac09a35f416b396f06da7963dedc8fa3920 (R3), minus the radiotap header: the ESP32 sets the rate
 // with esp_wifi_config_80211_tx_rate() instead. wfb_rx keeps only frames whose second address is
-// 57:42 followed by channel_id, so these bytes are what decides whether the NUC hears the ESP32.
+// 57:42 followed by channel_id, so these bytes are what decides whether a receiver's wfb_rx hears the ESP32.
 #pragma once
 
 #include <stddef.h>

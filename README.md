@@ -1,9 +1,18 @@
-# open-ipc latency playground
+# open-ipc
 
-Webcam → H.264 → wfb-ng (the OpenIPC FPV radio link) → another computer's screen, built to measure latency.
+Digital video links over [wfb-ng](https://github.com/svpcom/wfb-ng), the long-range WiFi broadcast link that OpenIPC FPV uses, kept compatible with an unmodified upstream `wfb_rx`:
+
+- **ESP32 cameras and a base station.** ESP32-CAM boards send JPEG video and telemetry over wfb-ng. An ESP32 with Ethernet (the Olimex ESP32-POE) receives up to three of them and serves each camera on the LAN: as RTSP, in a web page with its telemetry, and its telemetry as UDP.
+- **To a video server.** A PC burns each camera's telemetry and signal quality into its video, encodes H.264 and pushes it to an RTMP server.
+- **PC to PC.** A webcam on one Linux PC, encoded as H.264, to another PC's screen, with off-the-shelf WiFi adapters.
+
+Every part reports what it does (frame rate, bitrate, signal, losses), and latency is measured with a photographed clock. The design and its milestones are in [docs/DESIGN.md](docs/DESIGN.md), the ESP32 firmware in [esp32/](esp32/README.md).
 
 ```
-tx machine: webcam → sender.sh → :5602 → wfb_tx → WiFi ))) ((( WiFi → wfb_rx → :5600 → receiver.sh :rx machine
+ESP32-CAM 0..2 ─ wfb-ng, 2.4 GHz ─► base station (ESP32 + Ethernet) ─► LAN: RTSP, web page, telemetry
+                                                                      └► PC: telemetry burned in, H.264 ─► RTMP server
+
+sending PC: webcam → sender.sh → wfb_tx → WiFi ))) ((( WiFi → wfb_rx → receiver.sh :receiving PC
 ```
 
 ## Start here: cameras and the base station
@@ -29,29 +38,29 @@ cd open-ipc
 
 `./ipc setup` installs the ESP32 tools into your home folder (about 2 GB, 10–20 minutes the first time; no sudo). If something is missing it says what, with the install command for Arch, Debian/Ubuntu and Fedora: install it and run `./ipc setup` again. If it asks you to join a group (`uucp` or `dialout`), do that and log out and back in, or flashing can't open the USB port.
 
-Flashing finds the board's USB port by itself, checks the board starts, and says what to do next. After flashing, a camera only needs power from any USB charger. Use a USB data cable: with a charge-only cable no port appears. The rest of this README covers the original PC-to-PC link and how everything works.
+Flashing finds the board's USB port by itself, checks the board starts, and says what to do next. After flashing, a camera only needs power from any USB charger. Use a USB data cable: with a charge-only cable no port appears. To watch the cameras without a base station, a PC with a WiFi adapter that receives in monitor mode can stand in for it: `VIDEO=jpeg ./rx.sh` (see the PC-to-PC link below). How the firmware works, and what the base station can serve, is in [esp32/README.md](esp32/README.md).
 
 ## Quick start: the PC-to-PC link
 
 ```sh
-./tx.sh     # XPS: sends its webcam with its built-in Intel WiFi card (wlan0)
-./rx.sh     # NUC: receives with the Ralink USB stick (wlan1)
+./tx.sh     # on the sending PC: its webcam, over its WiFi adapter
+./rx.sh     # on the receiving PC: the video window
 ```
 
-The defaults (channel 6, send on `wlan0`, receive on `wlan1`) match this setup. If a machine doesn't have the named interface, its first WiFi interface is used. Run both as your normal user, not with sudo; they ask for the password themselves. Each one runs its half of the radio link plus the sender or receiver. Everything stops on Ctrl-C, when you close its window, or when the radio link stops. `tx.sh` shows a preview of what is sent and `rx.sh` shows what arrives. The WiFi card is offline while the link runs. wfb-ng is fetched and built on first run.
+Each end needs a WiFi adapter that works in monitor mode in its role (see the hardware notes below). By default the sender uses `wlan0` and the receiver `wlan1`, on channel 6; set `TX_IF` / `RX_IF` to pick others (Options). If a machine doesn't have the named interface, its first WiFi interface is used. Run both as your normal user, not with sudo; they ask for the password themselves. Each one runs its half of the radio link plus the sender or receiver. Everything stops on Ctrl-C, when you close its window, or when the radio link stops. `tx.sh` shows a preview of what is sent and `rx.sh` shows what arrives. The WiFi card is offline while the link runs. wfb-ng is fetched and built on first run.
 
-## Results (2026-10-06)
+## Results: PC to PC (2026-10-06)
 
 | | |
 |---|---|
-| **Working link** | XPS 13 (Intel WiFi) sending on 2.4 GHz channel 6 → NUC with a Ralink RT5572 USB stick receiving |
-| **Latency** | about **35 ms** (20–52 ms over 4 photos), from the XPS preview to the NUC window. That covers encoding, radio, decoding and display, but not the webcam's own delay. The XPS preview lags slightly behind the real send moment, so the true figure is a little higher. |
+| **Working link** | a laptop's built-in Intel WiFi sending on 2.4 GHz channel 6 → a PC with a Ralink RT5572 USB stick receiving |
+| **Latency** | about **35 ms** (20–52 ms over 4 photos), from the sender's preview to the receiver's window. That covers encoding, radio, decoding and display, but not the webcam's own delay. The preview lags slightly behind the real send moment, so the true figure is a little higher. |
 
 ## Results: ESP32-CAM (2026-10-09)
 
 | | |
 |---|---|
-| **Working link** | AI-Thinker ESP32-CAM (firmware in `esp32/`) sending 640x480 RTP/JPEG on channel 6, HT20 MCS 3 → the same NUC and Ralink stick, unmodified `wfb_rx`, `VIDEO=jpeg ./rx.sh` |
+| **Working link** | AI-Thinker ESP32-CAM (firmware in `esp32/`) sending 640x480 RTP/JPEG on channel 6, HT20 MCS 3 → the same receiving PC and Ralink stick, unmodified `wfb_rx`, `VIDEO=jpeg ./rx.sh` |
 | **Video** | 25 fps, about 10 KB a frame: 175 RTP packets/s, about 1.9 Mbit/s delivered |
 | **Link** | about 1 m apart: RSSI -54 dBm, ~295 of ~300 frames/s received, 0-5/s repaired by FEC, none lost |
 | **Latency** | not measured yet; it looks acceptable by eye. The clock-photo measurement is part of M3 (#15). |
@@ -81,26 +90,22 @@ How far to trust it: the link was marginal and drifted. RSSI moved between -81 a
 - At about -81 dBm, 640x480 at 25 fps gets through with a few percent of packets lost after FEC.
 - MCS 5 needs a stronger signal than these boards manage; MCS 1 copes best when the signal is weak.
 - More FEC (6/12) repairs more but puts a third more frames on air for the same video.
-- The rest is set by the antennas: the NUC's Ralink stick hears the same camera at -54 dBm, the second ESP32-CAM at -81 to -90 dBm.
+- The rest is set by the antennas: the PC's Ralink stick hears the same camera at -54 dBm, the second ESP32-CAM at -81 to -90 dBm.
 
 Latency is not measured yet: it needs the clock-photo method (Measure latency, below).
 
-An earlier run lost 10-20% of frames at -74 dBm; a scan from the ESP32-CAM heard the home router 28 dB weaker than the NUC did, which points at the board's antenna (#23).
+An earlier run lost 10-20% of frames at -74 dBm; a scan from the ESP32-CAM heard the home router 28 dB weaker than a PC next to it did, which points at the board's antenna (#23).
 
 What we learned about the hardware:
 
-- **Intel cards can send but can't receive.** The NUC's Intel AX201 captured nothing in monitor mode, not even beacons from the home router (`sniff.sh` showed 0 frames). The XPS's Intel card also got 0 packets as a receiver. Sending from the XPS's Intel card works.
+- **Intel cards can send but can't receive.** An Intel AX201 captured nothing in monitor mode, not even beacons from the home router (`sniff.sh` showed 0 frames). A laptop's Intel card also got 0 packets as a receiver. Sending from that laptop's Intel card works.
 - **Intel cards won't transmit on 5 GHz channel 36.** It's marked "No IR" (no initiating radiation) for them, so use 2.4 GHz (`CHANNEL=6`) when an Intel card sends.
 - **The Ralink RT5572 receives well.** Its `rt2800usb` driver is built into the kernel. Whether it also transmits is unconfirmed: on channel 36 it accepted around 775 packets/s, but the only listener was an Intel card, which can't hear anything.
 - **Each end of a wfb-ng link needs a card that works in that role.** The best choice is still a pair of RTL8812AU/EU or AR9271 adapters, which handle both roles.
 
 ## Setup
 
-```sh
-git clone --recursive https://github.com/magnuszetterberg/open-ipc.git
-cd open-ipc
-make -C wfb-ng all_bin        # optional, tx.sh/rx.sh do this; needs libpcap and libsodium
-```
+Clone with `--recursive` and run `./ipc setup` (Start here). It also builds wfb-ng for the PC-to-PC link, or says which packages that needs (libpcap and libsodium); `tx.sh` and `rx.sh` build it on first run too.
 
 `keys/` holds test keys derived from the password `change-me` (`cd keys && ../wfb-ng/wfb_keygen change-me`). The same password always gives the same pair, so every clone can talk to every other. The transmitter uses `drone.key` and the receiver uses `gs.key`. For anything beyond desk tests, generate your own pair with a real password (or none, for a random pair) and copy it to both machines. Anyone with these test keys can read and inject into the link.
 
@@ -125,7 +130,7 @@ Pass these as environment variables in front of `./tx.sh` / `./rx.sh`:
 |---|---|
 | `ipc` | the front door for the cameras and the base station: flash, view, stream, log, setup (see Start here) |
 | `tx.sh` / `rx.sh` | one command per machine (link + sender/receiver) |
-| `link.sh [tx\|rx]` | puts the card in monitor mode and runs `wfb_tx` / `wfb_rx` (needs sudo); with no argument, runs both ends on one machine with two cards (untested: on the NUC that means Intel sending, Ralink receiving) |
+| `link.sh [tx\|rx]` | puts the card in monitor mode and runs `wfb_tx` / `wfb_rx` (needs sudo); with no argument, runs both ends on one machine with two cards (untested) |
 | `sender.sh` | webcam or test pattern → H.264 → RTP; burns a `TX hh:mm:ss.mmm` timestamp into each frame |
 | `receiver.sh` | RTP → low-latency video window |
 | `burnin.sh` | ESP32-CAM video with its telemetry and signal quality burned in, as H.264: to RTMP, a file, or a window |

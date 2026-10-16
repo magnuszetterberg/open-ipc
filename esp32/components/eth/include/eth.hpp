@@ -27,7 +27,7 @@ esp_err_t eth_start(const eth_config &config, int timeout_ms);
 // the ESP32 errata warns about with Wi-Fi on (#18).
 uint32_t eth_link_drops(void);
 
-// Sends each payload as one UDP datagram to host:port (R5): the receiver's payloads go to the NUC.
+// Sends each payload as one UDP datagram to host:port (R5): the receiver's payloads go to a PC on the LAN.
 class udp_out : public wfb_payload_sink
 {
 public:
