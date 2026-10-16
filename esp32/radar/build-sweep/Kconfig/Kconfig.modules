@@ -1,0 +1,44 @@
+menu "cmsis (/home/magnus/zephyr/zephyr-v4.4.2/modules/hal/cmsis)"
+osource "$(ZEPHYR_CMSIS_KCONFIG)"
+config ZEPHYR_CMSIS_MODULE
+	bool
+	default y
+endmenu
+menu "cmsis_6 (/home/magnus/zephyr/zephyr-v4.4.2/modules/hal/cmsis_6)"
+osource "$(ZEPHYR_CMSIS_6_KCONFIG)"
+config ZEPHYR_CMSIS_6_MODULE
+	bool
+	default y
+endmenu
+menu "hal_nxp (/home/magnus/zephyr/zephyr-v4.4.2/modules/hal/nxp)"
+osource "$(ZEPHYR_HAL_NXP_KCONFIG)"
+config ZEPHYR_HAL_NXP_MODULE
+	bool
+	default y
+	select TAINT_BLOBS
+
+config ZEPHYR_HAL_NXP_MODULE_BLOBS
+	bool
+	default y
+endmenu
+menu "hostap (/home/magnus/zephyr/zephyr-v4.4.2/modules/lib/hostap)"
+osource "$(ZEPHYR_HOSTAP_KCONFIG)"
+config ZEPHYR_HOSTAP_MODULE
+	bool
+	default y
+endmenu
+menu "mbedtls (/home/magnus/zephyr/zephyr-v4.4.2/modules/crypto/mbedtls)"
+osource "$(ZEPHYR_MBEDTLS_KCONFIG)"
+config ZEPHYR_MBEDTLS_MODULE
+	bool
+	default y
+endmenu
+menu "picolibc (/home/magnus/zephyr/zephyr-v4.4.2/modules/lib/picolibc)"
+osource "/home/magnus/zephyr/zephyr-v4.4.2/modules/lib/picolibc/zephyr/Kconfig"
+config ZEPHYR_PICOLIBC_MODULE
+	bool
+	default y
+endmenu
+config ZEPHYR_TF_PSA_CRYPTO_MODULE
+	bool
+	default y

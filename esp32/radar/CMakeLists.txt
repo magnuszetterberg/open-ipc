@@ -7,6 +7,8 @@ project(radar C CXX)
 # libsodium, then the core (R4), which links it
 include(sodium/sodium.cmake)
 add_subdirectory(../components/wfb_core wfb_core)
+add_subdirectory(../components/rtp_jpeg rtp_jpeg)
+add_subdirectory(../components/radar_picture radar_picture)
 
 # The link key (R9), as a C array the keys component includes
 include(../components/keys/key_file.cmake)
@@ -17,5 +19,5 @@ generate_inc_file_for_target(app ${key_file} ${key_inc})
 target_sources(app PRIVATE src/main.cpp src/radio.cpp src/radio_nxp.c src/radar.cpp src/uwb.c ../components/keys/keys.cpp)
 target_include_directories(app PRIVATE ../components/keys/include)
 # Zephyr links only its own tree's libraries by itself
-target_link_libraries(app PRIVATE wfb_core sodium)
+target_link_libraries(app PRIVATE wfb_core sodium radar_picture rtp_jpeg)
 set_source_files_properties(../components/keys/keys.cpp PROPERTIES COMPILE_DEFINITIONS WFB_KEY_INC="${key_inc}")

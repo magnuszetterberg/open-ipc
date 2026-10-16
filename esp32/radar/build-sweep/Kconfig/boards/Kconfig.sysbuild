@@ -1,0 +1,2 @@
+# Load Sysbuild board Kconfig descriptions.
+osource "/home/magnus/zephyr/zephyr-v4.4.2/zephyr/boards/nxp/frdm_rw612/Kconfig.sysbuild"

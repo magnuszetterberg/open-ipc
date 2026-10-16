@@ -1,0 +1,54 @@
+cmake:
+  application:
+    configuration-dir: '/home/magnus/code/github/open-ipc/esp32/radar'
+    source-dir: '/home/magnus/code/github/open-ipc/esp32/radar'
+  board:
+    name: 'frdm_rw612'
+    path:
+     - '/home/magnus/zephyr/zephyr-v4.4.2/zephyr/boards/nxp/frdm_rw612'
+    qualifiers: 'rw612'
+    revision: ''
+  devicetree:
+    bindings-dirs:
+     - '/home/magnus/code/github/open-ipc/esp32/radar/dts/bindings'
+     - '/home/magnus/zephyr/zephyr-v4.4.2/zephyr/dts/bindings'
+    files:
+     - '/home/magnus/zephyr/zephyr-v4.4.2/zephyr/boards/nxp/frdm_rw612/frdm_rw612.dts'
+     - '/home/magnus/code/github/open-ipc/esp32/radar/boards/frdm_rw612.overlay'
+    include-dirs:
+     - '/home/magnus/zephyr/zephyr-v4.4.2/modules/hal/nxp/dts'
+     - '/home/magnus/code/github/open-ipc/esp32/radar/dts'
+     - '/home/magnus/zephyr/zephyr-v4.4.2/zephyr/include'
+     - '/home/magnus/zephyr/zephyr-v4.4.2/zephyr/include/zephyr'
+     - '/home/magnus/zephyr/zephyr-v4.4.2/zephyr/dts/common'
+     - '/home/magnus/zephyr/zephyr-v4.4.2/zephyr/dts/vendor'
+     - '/home/magnus/zephyr/zephyr-v4.4.2/zephyr/dts/rx'
+     - '/home/magnus/zephyr/zephyr-v4.4.2/zephyr/dts/x86'
+     - '/home/magnus/zephyr/zephyr-v4.4.2/zephyr/dts/xtensa'
+     - '/home/magnus/zephyr/zephyr-v4.4.2/zephyr/dts/sparc'
+     - '/home/magnus/zephyr/zephyr-v4.4.2/zephyr/dts/riscv'
+     - '/home/magnus/zephyr/zephyr-v4.4.2/zephyr/dts/posix'
+     - '/home/magnus/zephyr/zephyr-v4.4.2/zephyr/dts/arm64'
+     - '/home/magnus/zephyr/zephyr-v4.4.2/zephyr/dts/arm'
+     - '/home/magnus/zephyr/zephyr-v4.4.2/zephyr/dts/arc'
+     - '/home/magnus/zephyr/zephyr-v4.4.2/zephyr/dts'
+    user-files:
+     - '/home/magnus/code/github/open-ipc/esp32/radar/boards/frdm_rw612.overlay'
+  kconfig:
+    files:
+     - '/home/magnus/zephyr/zephyr-v4.4.2/zephyr/boards/nxp/frdm_rw612/frdm_rw612_defconfig'
+     - '/home/magnus/code/github/open-ipc/esp32/radar/prj.conf'
+     - '/home/magnus/code/github/open-ipc/esp32/radar/build-sweep/zephyr/misc/generated/extra_kconfig_options.conf'
+    user-files:
+     - '/home/magnus/code/github/open-ipc/esp32/radar/prj.conf'
+  toolchain:
+    name: 'zephyr'
+    path: '/home/magnus/zephyr/zephyr-sdk-1.0.1'
+  zephyr:
+    version: '4.4.2'
+    zephyr-base: '/home/magnus/zephyr/zephyr-v4.4.2/zephyr'
+version: '0.1.0'
+west:
+  command: '/home/magnus/zephyr/zephyr-v4.4.2/.venv/bin/west build -p always -b frdm_rw612 -d radar/build-sweep radar -- -DCONFIG_LINK_PAYLOAD_COUNTER=y -DCONFIG_LINK_RADIO_PORT=1'
+  topdir: '/home/magnus/zephyr/zephyr-v4.4.2'
+  version: '1.5.0'

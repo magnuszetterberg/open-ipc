@@ -24,32 +24,41 @@ menu "wfb-ng link"
             wfb-ng's link_id; with the radio port it makes the channel_id the receiver listens for.
 
     config LINK_RADIO_PORT
-        int "Radio port"
-        range 0 255
+        int "Radio port (camera number)"
+        range 0 15
+        default 2 if LINK_PAYLOAD_RADAR_PICTURE
         default 0
         help
-            Camera N's video port. link.sh's wfb_rx listens on port 0.
+            Camera N's video port; its telemetry goes on 0x10 + N. The radar picture is camera 2 by default,
+            next to ESP32-CAMs 0 and 1 on the base station. link.sh's wfb_rx listens on port 0.
 
     config LINK_FEC_K
         int "FEC k (data packets per block)"
         range 1 32
-        default 1 if LINK_PAYLOAD_RADAR
+        default 1 if LINK_PAYLOAD_RADAR_RAW
         default 8
         help
-            The radar sends one small packet per measurement: k = 1 sends each at once, as telemetry does.
+            The raw radar data is one small packet per measurement: k = 1 sends each at once, as telemetry
+            does. Pictures use the cameras' 8/12.
 
     config LINK_FEC_N
         int "FEC n (data + FEC packets per block)"
         range 1 32
-        default 2 if LINK_PAYLOAD_RADAR
+        default 2 if LINK_PAYLOAD_RADAR_RAW
         default 12
 
     choice LINK_PAYLOAD
         prompt "What to send"
-        default LINK_PAYLOAD_RADAR
+        default LINK_PAYLOAD_RADAR_PICTURE
 
-        config LINK_PAYLOAD_RADAR
-            bool "The SR250's radar data"
+        config LINK_PAYLOAD_RADAR_PICTURE
+            bool "The radar picture (RTP/JPEG video, and the finding as telemetry)"
+            help
+                What the SR250 finds, drawn as camera N's video: the base station, ./ipc receive and the
+                burn-in script show it as they show a camera.
+
+        config LINK_PAYLOAD_RADAR_RAW
+            bool "The radar's raw measurements (R1, for pc/radar_view.py)"
 
         config LINK_PAYLOAD_COUNTER
             bool "Counter (link test)"
@@ -57,6 +66,20 @@ menu "wfb-ng link"
                 A numbered payload; esp32/tools/counter_check.py on the receiver reports any that go missing.
 
     endchoice
+
+    config RADAR_PICTURE_EVERY
+        int "Measurements per picture"
+        depends on LINK_PAYLOAD_RADAR_PICTURE
+        range 1 20
+        default 4
+        help
+            The radar measures 20 times a second: 4 makes 5 pictures a second.
+
+    config RADAR_JPEG_QUALITY
+        int "Picture JPEG quality"
+        depends on LINK_PAYLOAD_RADAR_PICTURE
+        range 10 100
+        default 80
 
     config LINK_COUNTER_RATE
         int "Counter payloads per second"

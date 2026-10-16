@@ -1,0 +1,8 @@
+set(kconfig_env_dirs)
+list(APPEND kconfig_env_dirs ZEPHYR_CMSIS_MODULE_DIR=/home/magnus/zephyr/zephyr-v4.4.2/modules/hal/cmsis)
+list(APPEND kconfig_env_dirs ZEPHYR_CMSIS_6_MODULE_DIR=/home/magnus/zephyr/zephyr-v4.4.2/modules/hal/cmsis_6)
+list(APPEND kconfig_env_dirs ZEPHYR_HAL_NXP_MODULE_DIR=/home/magnus/zephyr/zephyr-v4.4.2/modules/hal/nxp)
+list(APPEND kconfig_env_dirs ZEPHYR_HOSTAP_MODULE_DIR=/home/magnus/zephyr/zephyr-v4.4.2/modules/lib/hostap)
+list(APPEND kconfig_env_dirs ZEPHYR_MBEDTLS_MODULE_DIR=/home/magnus/zephyr/zephyr-v4.4.2/modules/crypto/mbedtls)
+list(APPEND kconfig_env_dirs ZEPHYR_PICOLIBC_MODULE_DIR=/home/magnus/zephyr/zephyr-v4.4.2/modules/lib/picolibc)
+list(APPEND kconfig_env_dirs ZEPHYR_TF_PSA_CRYPTO_MODULE_DIR=/home/magnus/zephyr/zephyr-v4.4.2/modules/crypto/tf-psa-crypto)

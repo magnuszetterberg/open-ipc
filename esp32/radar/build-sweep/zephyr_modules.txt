@@ -1,0 +1,7 @@
+"cmsis":"/home/magnus/zephyr/zephyr-v4.4.2/modules/hal/cmsis":"${ZEPHYR_CMSIS_CMAKE_DIR}"
+"cmsis_6":"/home/magnus/zephyr/zephyr-v4.4.2/modules/hal/cmsis_6":"${ZEPHYR_CMSIS_6_CMAKE_DIR}"
+"hal_nxp":"/home/magnus/zephyr/zephyr-v4.4.2/modules/hal/nxp":"${ZEPHYR_HAL_NXP_CMAKE_DIR}"
+"hostap":"/home/magnus/zephyr/zephyr-v4.4.2/modules/lib/hostap":"${ZEPHYR_HOSTAP_CMAKE_DIR}"
+"mbedtls":"/home/magnus/zephyr/zephyr-v4.4.2/modules/crypto/mbedtls":"${ZEPHYR_MBEDTLS_CMAKE_DIR}"
+"picolibc":"/home/magnus/zephyr/zephyr-v4.4.2/modules/lib/picolibc":"/home/magnus/zephyr/zephyr-v4.4.2/modules/lib/picolibc"
+"tf-psa-crypto":"/home/magnus/zephyr/zephyr-v4.4.2/modules/crypto/tf-psa-crypto":""
