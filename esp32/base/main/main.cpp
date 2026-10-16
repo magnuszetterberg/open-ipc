@@ -128,6 +128,7 @@ struct camera
     uint32_t frames_heard = 0;
     uint32_t last_cut = 0;  // streamer.frames_cut at the last report
     int rssi_sum = 0;
+    uint8_t rate = 0;       // of the last frame heard (radio_frame::rate)
     wfb_rx_stats last;
 };
 
@@ -237,9 +238,11 @@ static void report(radio_rx *radio)
         c.signal.video_kbps = c.video_out.bytes * 8 / 1000;
         if (c.frames_heard > 0)
         {
-            ESP_LOGI(TAG, "cam%d: %lu frames (rssi %d) | video %lu fps, %lu kbit/s, fec_rec %lu, lost %lu, dec_err %lu | "
+            char rate[16];
+            ESP_LOGI(TAG, "cam%d: %lu frames (rssi %d, %s) | video %lu fps, %lu kbit/s, fec_rec %lu, lost %lu, dec_err %lu | "
                           "telemetry %lu | rtsp clients %d, web viewers %d (%lu JPEGs cut on air)",
-                     i, (unsigned long)c.frames_heard, c.signal.rssi_dbm, (unsigned long)c.video_out.frames,
+                     i, (unsigned long)c.frames_heard, c.signal.rssi_dbm, radio_rate_name(c.rate, rate, sizeof(rate)),
+                     (unsigned long)c.video_out.frames,
                      (unsigned long)c.signal.video_kbps,
                      (unsigned long)(s.count_p_fec_recovered - c.last.count_p_fec_recovered), (unsigned long)lost,
                      (unsigned long)(s.count_p_dec_err - c.last.count_p_dec_err),
@@ -293,6 +296,7 @@ static void receive_task(void *arg)
                 camera &c = cameras[i];
                 c.frames_heard += 1;
                 c.rssi_sum += f->rssi;
+                c.rate = f->rate;
                 (telemetry ? c.telemetry : c.video).process_packet(f->data, f->size);
             }
             radio->release(f);

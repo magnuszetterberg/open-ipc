@@ -6,6 +6,7 @@
 #include "esp_heap_caps.h"
 #include "nvs_flash.h"
 
+#include <stdio.h>
 #include <string.h>
 
 static const char *TAG = "radio";
@@ -97,6 +98,22 @@ esp_err_t radio_rx::start(int slots)
     return ESP_OK;
 }
 
+const char *radio_rate_name(uint8_t rate, char *buf, size_t size)
+{
+    // wifi_phy_rate_t's legacy codes, in Mbit/s; 0x04 isn't used
+    static const char *const legacy[] = {"1",  "2",  "5.5", "11", "?",  "2 short", "5.5 short", "11 short",
+                                         "48", "24", "12",  "6",  "54", "36",      "18",        "9"};
+    if (rate & RADIO_RATE_HT)
+    {
+        snprintf(buf, size, "MCS %d", rate & 0x7f);
+    }
+    else
+    {
+        snprintf(buf, size, "%s Mbit/s", rate < sizeof(legacy) / sizeof(legacy[0]) ? legacy[rate] : "?");
+    }
+    return buf;
+}
+
 void radio_rx::callback(void *buf, wifi_promiscuous_pkt_type_t type)
 {
     radio_rx *self = receiver;
@@ -129,6 +146,7 @@ void radio_rx::callback(void *buf, wifi_promiscuous_pkt_type_t type)
     }
     f->channel_id = channel_id;
     f->rssi = pkt->rx_ctrl.rssi;
+    f->rate = pkt->rx_ctrl.sig_mode == 1 ? RADIO_RATE_HT | pkt->rx_ctrl.mcs : pkt->rx_ctrl.rate;
     f->size = packet_size;
     memcpy(f->data, packet, packet_size);
     xQueueSend(self->full_slots, &f, 0);

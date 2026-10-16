@@ -43,9 +43,15 @@ struct radio_frame
 {
     uint32_t channel_id;  // (link_id << 8) + radio_port, from the second address
     int8_t rssi;          // dBm
+    uint8_t rate;         // on air: RADIO_RATE_HT | MCS for 802.11n, else the legacy rate (wifi_phy_rate_t)
     uint16_t size;
     uint8_t data[1500];
 };
+
+static const uint8_t RADIO_RATE_HT = 0x80;
+
+// A frame's rate as text, e.g. "MCS 3" or "1 Mbit/s", for stats lines.
+const char *radio_rate_name(uint8_t rate, char *buf, size_t size);
 
 // Receives wfb-ng frames in promiscuous mode (R5). The WiFi driver's callback only checks and copies;
 // the frames are handed over through a queue, to be decrypted and decoded in the caller's task.
