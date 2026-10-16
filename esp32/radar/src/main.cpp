@@ -59,20 +59,52 @@ static const uint32_t TELEMETRY_ID = ((uint32_t)CONFIG_LINK_ID << 8) + 0x10 + CO
 static stream telemetry(TELEMETRY_ID);
 static radar_detector detector;
 
-// Each RTP packet becomes one wfb-ng payload
-struct wfb_rtp_sink : rtp_jpeg_sink
+// A picture's RTP packets, each to become one wfb-ng payload, queued and sent CONFIG_RADAR_PACKET_GAP_MS apart
+// rather than in one burst: the base station streams each picture to its web viewers as it arrives, with
+// room for about 8 KB per viewer, and a picture arriving within a few milliseconds outran that and was cut.
+struct paced_sink : rtp_jpeg_sink
 {
-    uint64_t now = 0;
-    uint32_t packets = 0, errors = 0;
+    static constexpr int MAX = 32;
+    uint8_t packets[MAX][WFB_MAX_PACKET];
+    uint16_t sizes[MAX];
+    int count = 0, next = 0;
+    uint64_t next_at = 0;
+    uint32_t sent = 0, errors = 0, overflow = 0;
+
+    bool pending() const { return next < count; }
+
     void send_rtp(const uint8_t *packet, size_t size) override
     {
-        if (video.tx.send(packet, size, now) == WFB_OK)
+        if (count == MAX || size > WFB_MAX_PACKET)
         {
-            packets += 1;
+            overflow += 1;
+            return;
+        }
+        memcpy(packets[count], packet, size);
+        sizes[count++] = (uint16_t)size;
+    }
+
+    // Sends the next packet when its time has come; after the last, closes the FEC block so the picture
+    // needs no later one to be recoverable
+    void poll(uint64_t now)
+    {
+        if (!pending() || now < next_at)
+        {
+            return;
+        }
+        if (video.tx.send(packets[next], sizes[next], now) == WFB_OK)
+        {
+            sent += 1;
         }
         else
         {
             errors += 1;
+        }
+        next_at = now + CONFIG_RADAR_PACKET_GAP_MS * 1000;
+        if (++next == count)
+        {
+            video.tx.close_block();
+            count = next = 0;
         }
     }
 };
@@ -98,7 +130,7 @@ static void radar_loop()
 #if CONFIG_LINK_PAYLOAD_RADAR_PICTURE
     static radar_picture picture;     // static: 150 KB of YCbCr
     static uint8_t jpeg[32 * 1024];
-    static wfb_rtp_sink sink;
+    static paced_sink sink;   // static: 45 KB of queued packets
     rtp_jpeg_config rtp_cfg;
     rtp_cfg.max_packet = video.tx.max_payload();
     static rtp_jpeg_packetizer packetizer(sink, rtp_cfg);
@@ -113,7 +145,13 @@ static void radar_loop()
     for (;;)
     {
         radar_cirs cirs;
-        if (radar_next(&cirs, 1000))
+#if CONFIG_LINK_PAYLOAD_RADAR_PICTURE
+        sink.poll(now_us());
+        bool got = radar_next(&cirs, sink.pending() ? 2 : 1000);   // short waits while packets are queued
+#else
+        bool got = radar_next(&cirs, 1000);
+#endif
+        if (got)
         {
             size_t n = radar_pack(cirs, seq++, r1, sizeof(r1));
             if (n == 0 || !detector.add_r1(r1, n))
@@ -132,7 +170,7 @@ static void radar_loop()
             }
 #else
             picture.add(detector);
-            if (detector.measurements % CONFIG_RADAR_PICTURE_EVERY == 0)
+            if (detector.measurements % CONFIG_RADAR_PICTURE_EVERY == 0 && !sink.pending())
             {
                 uint64_t t0 = now_us();
                 picture.draw(detector);
@@ -143,20 +181,17 @@ static void radar_loop()
                 {
                     too_big += 1;
                 }
+                else if (packetizer.send_frame(jpeg, size, (uint32_t)(now_us() * 9 / 100)) == RTP_JPEG_OK &&
+                         sink.overflow == 0)
+                {
+                    sent += 1;
+                    pictures += 1;
+                    picture_bytes += size;
+                }
                 else
                 {
-                    sink.now = now_us();
-                    if (packetizer.send_frame(jpeg, size, (uint32_t)(sink.now * 9 / 100)) == RTP_JPEG_OK)
-                    {
-                        sent += 1;
-                        pictures += 1;
-                        picture_bytes += size;
-                    }
-                    else
-                    {
-                        send_errors += 1;
-                    }
-                    video.tx.close_block();   // the picture's last packets need no later picture to be recoverable
+                    send_errors += 1;
+                    sink.overflow = 0;
                 }
             }
 #endif

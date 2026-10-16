@@ -29,13 +29,9 @@
 // wlan_host_tx_frame_params_t's fixed part: the length field and a four-address 802.11 header
 #define HOST_FRAME_HEADER (sizeof(uint16_t) + TXRX_MGMT_FRAME_HEADER_LEN)
 
-#if CONFIG_RADIO_TX_COMMAND
-// mlan_ds_misc_tx_frame's tx_buf is 512 bytes, and the driver puts an 8-byte packet header in front
-#define HOST_FRAME_MAX (512 - TXRX_MGMT_FRAME_HEADER_SIZE)
-#else
-// One of the driver's 1536-byte buffers, less its own headers in front of the frame
+// The largest frame handed to the driver: on the data path one of its 1536-byte buffers, less its own headers
+// in front of the frame; on the command path the same, which the command buffer holds with room to spare
 #define HOST_FRAME_MAX 1400
-#endif
 
 // Set in radio_nxp_start(): CONFIG_RADIO_TX_CONTROL, or HT20 MCS from the configured MCS
 uint32_t radio_nxp_tx_control;
@@ -46,24 +42,35 @@ uint32_t radio_nxp_tx_control;
 // firmware command, with the frame's tx_control set (TXPD_TXRATE_ENABLE and a rate) instead of left at 0,
 // where the firmware sends at its lowest rate, 1 Mbit/s. wlan_mgmtframe_tx_cfg()'s checks (monitor mode on,
 // no network joined) are radio_nxp_start()'s.
+// mlan_ds_misc_tx_frame ends in a 512-byte tx_buf, which wfb-ng's packets outgrow three times over, and
+// smaller packets mean more frames for every receiver. The command it becomes has room for a full frame
+// (the RW612's command buffer is WIFI_FW_CMDBUF_SIZE, 3072 bytes), so the struct gets a longer buffer behind
+// it: tx_buf is its last member.
+#define TX_BUF_EXTRA (HOST_FRAME_MAX + TXRX_MGMT_FRAME_HEADER_SIZE - 512)
+static union
+{
+    mlan_ds_misc_tx_frame frame;
+    uint8_t bytes[sizeof(mlan_ds_misc_tx_frame) + TX_BUF_EXTRA];
+} tx_mem;   // static: 1.5 KB, and there is one sender
+
 static int send_command(const wlan_host_tx_frame_params_t *frame)
 {
-    static mlan_ds_misc_tx_frame tx_frame;  // static: over 500 bytes, and there is one sender
-    (void)memset(&tx_frame, 0, sizeof(tx_frame));
-    uint8_t *buf = tx_frame.tx_buf;
+    mlan_ds_misc_tx_frame *tx_frame = &tx_mem.frame;
+    (void)memset(tx_mem.bytes, 0, sizeof(tx_mem.bytes));
+    uint8_t *buf = tx_frame->tx_buf;
     uint32_t pkt_type = MRVL_PKT_TYPE_MGMT_FRAME;
     (void)memcpy(buf, &pkt_type, sizeof(pkt_type));
     (void)memcpy(buf + sizeof(pkt_type), &radio_nxp_tx_control, sizeof(radio_nxp_tx_control));
     (void)memcpy(buf + TXRX_MGMT_FRAME_HEADER_SIZE, frame, sizeof(frame->frm_len) + frame->frm_len);
-    tx_frame.data_len = sizeof(frame->frm_len) + TXRX_MGMT_FRAME_HEADER_SIZE + frame->frm_len;
-    tx_frame.buf_type = MLAN_BUF_TYPE_RAW_DATA;
-    tx_frame.priority = 7;
+    tx_frame->data_len = sizeof(frame->frm_len) + TXRX_MGMT_FRAME_HEADER_SIZE + frame->frm_len;
+    tx_frame->buf_type = MLAN_BUF_TYPE_RAW_DATA;
+    tx_frame->priority = 7;
 
     (void)wifi_get_command_lock();
     HostCmd_DS_COMMAND *cmd = wifi_get_command_buffer();
     (void)memset(cmd, 0x00, sizeof(HostCmd_DS_COMMAND));
     if (wlan_ops_sta_prepare_cmd((mlan_private *)mlan_adap->priv[0], HostCmd_CMD_802_11_TX_FRAME,
-                                 HostCmd_ACT_GEN_SET, 0, NULL, &tx_frame, cmd) != MLAN_STATUS_SUCCESS)
+                                 HostCmd_ACT_GEN_SET, 0, NULL, tx_frame, cmd) != MLAN_STATUS_SUCCESS)
     {
         wifi_put_command_lock();
         return -WM_FAIL;

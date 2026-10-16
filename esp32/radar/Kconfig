@@ -71,15 +71,28 @@ menu "wfb-ng link"
         int "Measurements per picture"
         depends on LINK_PAYLOAD_RADAR_PICTURE
         range 1 20
-        default 4
+        default 8
         help
-            The radar measures 20 times a second: 4 makes 5 pictures a second.
+            The radar measures 20 times a second: 8 makes 2.5 pictures a second. Every measurement still
+            counts for the finding and the trace. Each picture is ~20 packets of the RW612's ~470 bytes:
+            at 5 a second, next to a camera, the base station's receive queue overflowed.
+
+    config RADAR_PACKET_GAP_MS
+        int "Gap between a picture's packets (ms)"
+        depends on LINK_PAYLOAD_RADAR_PICTURE
+        range 0 50
+        default 15
+        help
+            A picture's ~8 packets go out this far apart, ~120 ms in all, not in one burst: the base
+            station passes each picture to its web viewers as it arrives, with room for ~8 KB per viewer.
 
     config RADAR_JPEG_QUALITY
         int "Picture JPEG quality"
         depends on LINK_PAYLOAD_RADAR_PICTURE
         range 10 100
-        default 80
+        default 60
+        help
+            60: ~8 KB a picture, the text still sharp; 80: ~11 KB.
 
     config LINK_COUNTER_RATE
         int "Counter payloads per second"
@@ -100,7 +113,7 @@ menu "wfb-ng link"
         default RADIO_TX_COMMAND
 
         config RADIO_TX_COMMAND
-            bool "wlan_mgmtframe_tx_cfg (a command per frame, at most 512 bytes)"
+            bool "A firmware command per frame (frames up to 1400 bytes)"
 
         config RADIO_TX_INJECT
             bool "wifi_inject_frame (the data path)"
