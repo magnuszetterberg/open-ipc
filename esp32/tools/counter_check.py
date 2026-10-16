@@ -3,7 +3,7 @@
 payloads arrived and whether any counter values were missing, repeated or out of order.
 
 Usage: esp32/tools/counter_check.py [port]     (default 5600, link.sh's OUT_PORT)
-Run it next to `sudo ./link.sh rx`; rx.sh's video window holds port 5600 itself. Ctrl-C quits.
+Run it next to `sudo pc/link.sh rx`; rx.sh's video window holds port 5600 itself. Ctrl-C quits.
 """
 import re
 import socket

@@ -78,7 +78,7 @@ The keys go in `keys/own/`, which git ignores. A PC that receives or sends with 
 
 ## Which WiFi adapter
 
-The base station and the cameras need nothing extra. A PC needs a WiFi adapter that works in monitor mode in its role; `./ipc` (and `tx.sh`, `rx.sh`) pick a suitable one by themselves:
+The base station and the cameras need nothing extra. A PC needs a WiFi adapter that works in monitor mode in its role; `./ipc` (and `pc/tx.sh`, `pc/rx.sh`) pick a suitable one by themselves:
 
 - **To receive:** a Ralink RT5572 USB stick works (its `rt2800usb` driver is in the kernel). RTL8812AU/EU and AR9271 adapters work too, and can also send. **Built-in Intel cards can't receive** in monitor mode.
 - **To send** (the PC-to-PC link): an Intel card can, on 2.4 GHz only (it refuses 5 GHz channel 36), so keep `CHANNEL=6`. RTL8812AU/EU and AR9271 adapters can send as well.
@@ -92,7 +92,7 @@ The base station and the cameras need nothing extra. A PC needs a WiFi adapter t
 
 Both pick a WiFi adapter that can do their part, and ask for your password. Each runs its half of the radio link plus the sender or the video window; everything stops on Ctrl-C, when you close its window, or when the radio link stops. The sending PC shows a preview of what it sends. The WiFi adapter is offline while the link runs. `./ipc receive` tells the webcam's H.264 from a camera's JPEG by itself. Both PCs need the same keys (step 4).
 
-Underneath they run `tx.sh` and `rx.sh`, which can be used directly too. These environment variables in front of `./tx.sh`, `./rx.sh` or `./ipc send` / `receive` change the link:
+Underneath they run `pc/tx.sh` and `pc/rx.sh`, which can be used directly too. These environment variables in front of `pc/tx.sh`, `pc/rx.sh` or `./ipc send` / `receive` change the link:
 
 | variable | default | meaning |
 |---|---|---|
@@ -101,9 +101,9 @@ Underneath they run `tx.sh` and `rx.sh`, which can be used directly too. These e
 | `TX_POWER` | 2000 | transmit power in mBm (2000 = 20 dBm); some cards ignore it |
 | `MCS` | 3 | radio data rate (HT20 MCS 3 = 26 Mbit/s) |
 
-`sender.sh` also reads `SOURCE=webcam|test`, `ENCODER=x264|vaapi`, `SIZE=1280x720`, `FPS=30`, `BITRATE=4M`, `DEVICE` and `PREVIEW=1`. `receiver.sh` reads `PLAYER=auto|gst|ffplay` and `VIDEO=h264|jpeg|auto` (`jpeg` for the ESP32-CAM's RTP/JPEG, `auto` to tell by the first packet). The GStreamer receiver needs gst-plugins-base, -good, -bad and gst-libav; if any are missing, it falls back to ffplay.
+`pc/sender.sh` also reads `SOURCE=webcam|test`, `ENCODER=x264|vaapi`, `SIZE=1280x720`, `FPS=30`, `BITRATE=4M`, `DEVICE` and `PREVIEW=1`. `pc/receiver.sh` reads `PLAYER=auto|gst|ffplay` and `VIDEO=h264|jpeg|auto` (`jpeg` for the ESP32-CAM's RTP/JPEG, `auto` to tell by the first packet). The GStreamer receiver needs gst-plugins-base, -good, -bad and gst-libav; if any are missing, it falls back to ffplay.
 
-Without a radio link, `./receiver.sh` and `./sender.sh` (port 5600) stream over localhost.
+Without a radio link, `pc/receiver.sh` and `pc/sender.sh` (port 5600) stream over localhost.
 
 ## Keys
 
@@ -111,13 +111,13 @@ Without a radio link, `./receiver.sh` and `./sender.sh` (port 5600) stream over 
 
 ## Measure latency
 
-**Two machines (no clock sync needed):** open `clock.html` on the **sending** machine and photograph it next to the receiving screen. The receiving window shows the sender's clock time burned into the frame, so:
+**Two machines (no clock sync needed):** open `pc/clock.html` on the **sending** machine and photograph it next to the receiving screen. The receiving window shows the sender's clock time burned into the frame, so:
 
 > latency = clock on the sender − `TX` timestamp on the receiver
 
 Comparing the two video windows (tx preview vs rx) is quicker, but it reads a bit low because the preview itself lags.
 
-**Including the camera:** point the camera at `clock.html` and put the receiving window next to it. One photo then shows three times:
+**Including the camera:** point the camera at `pc/clock.html` and put the receiving window next to it. One photo then shows three times:
 
 | difference | measures |
 |---|---|
@@ -129,21 +129,21 @@ Take several photos and average them. A 60 Hz screen limits each reading to abou
 
 ## Scripts
 
-`./ipc` covers the everyday tasks; these are what it uses, and work on their own:
+At the top there is only `./ipc`, which covers the everyday tasks. What it uses is in `pc/` (this PC's side) and `esp32/` (the firmware); all of it works on its own too:
 
 | script | does |
 |---|---|
 | `ipc` | the front door: setup, flash, view, stream, receive, send, keys, test, log |
-| `tx.sh` / `rx.sh` | one command per PC for the PC-to-PC link (link + sender/receiver) |
-| `link.sh [tx\|rx]` | puts the adapter in monitor mode and runs `wfb_tx` / `wfb_rx` (needs sudo); `rx` also receives camera 0's telemetry (UDP 5610) and keeps the latest signal stats in `/tmp/open-ipc-rx.stats` |
-| `wifi.sh` | which WiFi adapter sends or receives, and which keys: used by `link.sh` and `ipc` |
-| `sender.sh` | webcam or test pattern → H.264 → RTP; burns a `TX hh:mm:ss.mmm` timestamp into each frame |
-| `receiver.sh` | RTP → low-latency video window |
-| `burnin.sh` | a camera's video with its telemetry and signal quality burned in, as H.264: to RTMP, a file, or a window. Reads `FPS=25`, `BITRATE=2M`, `PORT`, `TELEMETRY_PORT`, `STATS_FILE`, and `VIDEO_IN=rtsp://...` for the base station's streams |
-| `telemetry_overlay.py` | keeps the overlay text for `burnin.sh` |
-| `build.sh` | fetches and builds wfb-ng if needed |
-| `sniff.sh [iface]` | counts what an adapter hears in monitor mode, to check it can receive at all |
-| `clock.html` | millisecond clock for latency photos |
+| `pc/tx.sh` / `pc/rx.sh` | one command per PC for the PC-to-PC link (link + sender/receiver) |
+| `pc/link.sh [tx\|rx]` | puts the adapter in monitor mode and runs `wfb_tx` / `wfb_rx` (needs sudo); `rx` also receives camera 0's telemetry (UDP 5610) and keeps the latest signal stats in `/tmp/open-ipc-rx.stats` |
+| `pc/wifi.sh` | which WiFi adapter sends or receives, and which keys: used by `link.sh` and `ipc` |
+| `pc/sender.sh` | webcam or test pattern → H.264 → RTP; burns a `TX hh:mm:ss.mmm` timestamp into each frame (`overlay.txt`) |
+| `pc/receiver.sh` | RTP → low-latency video window |
+| `pc/burnin.sh` | a camera's video with its telemetry and signal quality burned in, as H.264: to RTMP, a file, or a window. Reads `FPS=25`, `BITRATE=2M`, `PORT`, `TELEMETRY_PORT`, `STATS_FILE`, and `VIDEO_IN=rtsp://...` for the base station's streams |
+| `pc/telemetry_overlay.py` | keeps the overlay text for `burnin.sh` |
+| `pc/build-wfb-ng.sh` | fetches and builds wfb-ng if needed |
+| `pc/sniff.sh [iface]` | counts what an adapter hears in monitor mode, to check it can receive at all |
+| `pc/clock.html` | millisecond clock for latency photos |
 | `esp32/` | the firmware, its build and test scripts ([esp32/README.md](esp32/README.md)) |
 
 ## License
