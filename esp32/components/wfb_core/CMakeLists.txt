@@ -1,5 +1,6 @@
 # wfb_core: wfb-ng's protocol, encryption and FEC (core layer, R4). Plain C/C++ with no ESP-IDF
-# headers, so the same sources build as an ESP-IDF component and, through ../../host, for Linux.
+# headers, so the same sources build as an ESP-IDF component, for the RW612 (Zephyr) and, through ../../host,
+# for Linux.
 
 # The submodule is read-only (R2): its files are compiled and included from where they are.
 set(wfb_ng ${CMAKE_CURRENT_LIST_DIR}/../../../wfb-ng/src)
@@ -13,6 +14,18 @@ if(ESP_PLATFORM)
     idf_component_register(SRCS ${srcs} INCLUDE_DIRS include ${wfb_ng} PRIV_INCLUDE_DIRS esp_compat
                            REQUIRES espressif__libsodium lwip)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE ${zfex_defs})
+elseif(COMMAND zephyr_library_named)
+    # The radar firmware (esp32/radar, Zephyr on the RW612): zephyr_compat stands in for Linux headers, as
+    # esp_compat does on the ESP32; libsodium is built there (sodium.cmake)
+    zephyr_library_named(wfb_core)
+    zephyr_library_sources(${srcs})
+    zephyr_include_directories(include ${wfb_ng})
+    zephyr_library_include_directories(zephyr_compat)
+    # POSIX level, as on Linux: picolibc declares posix_memalign() and utime.h's time_t only then
+    zephyr_library_compile_definitions(${zfex_defs} _POSIX_C_SOURCE=200809L)
+    zephyr_library_link_libraries(sodium)
+    # Zephyr defines KERNEL for its own code; zfex.c uses the name for a macro of its own
+    set_source_files_properties(${wfb_ng}/zfex.c PROPERTIES COMPILE_OPTIONS -UKERNEL)
 else()
     add_library(wfb_core STATIC ${srcs})
     target_include_directories(wfb_core PUBLIC include ${wfb_ng})

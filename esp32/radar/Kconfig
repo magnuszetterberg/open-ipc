@@ -1,0 +1,71 @@
+mainmenu "Radar camera (FRDM-RW612)"
+
+menu "wfb-ng link"
+
+    config LINK_CHANNEL
+        int "WiFi channel"
+        range 1 13
+        default 6
+        help
+            Must match CHANNEL on the receiver (link.sh's default is 6) and the base station.
+
+    config LINK_MCS
+        int "HT20 MCS index"
+        range 0 7
+        default 3
+        help
+            The data rate. MCS 3 is 26 Mbit/s, as link.sh's MCS default.
+
+    config LINK_ID
+        hex "Link ID"
+        range 0x0 0xffffff
+        default 0x0
+        help
+            wfb-ng's link_id; with the radio port it makes the channel_id the receiver listens for.
+
+    config LINK_RADIO_PORT
+        int "Radio port"
+        range 0 255
+        default 0
+        help
+            Camera N's video port. link.sh's wfb_rx listens on port 0.
+
+    config LINK_FEC_K
+        int "FEC k (data packets per block)"
+        range 1 32
+        default 8
+
+    config LINK_FEC_N
+        int "FEC n (data + FEC packets per block)"
+        range 1 32
+        default 12
+
+    config LINK_COUNTER_RATE
+        int "Counter payloads per second"
+        range 1 2000
+        default 100
+
+    config LINK_COUNTER_SIZE
+        int "Counter payload size (bytes)"
+        range 32 1400
+        default 400
+        help
+            Cut to the link's max payload if larger.
+
+    choice RADIO_TX
+        prompt "How frames reach NXP's WiFi driver"
+        default RADIO_TX_COMMAND
+
+        config RADIO_TX_COMMAND
+            bool "wlan_mgmtframe_tx_cfg (a command per frame, at most 512 bytes)"
+
+        config RADIO_TX_INJECT
+            bool "wifi_inject_frame (the data path)"
+
+    endchoice
+
+endmenu
+
+rsource "../components/keys/Kconfig"
+
+source "Kconfig.zephyr"
