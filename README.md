@@ -18,7 +18,7 @@ The design and its milestones are in [docs/DESIGN.md](docs/DESIGN.md), the ESP32
 
 ## Start here
 
-Everything below goes through one command, `./ipc`. Run it on its own to see the list.
+Everything below goes through one command, `./ipc`. Run it on its own to see the list. `./ipc test` checks the software on this PC at any time (no boards needed).
 
 ### 1. Set up this computer (Linux, once)
 
@@ -49,9 +49,20 @@ Each one asks you to plug the board in, finds its USB port, flashes it, checks t
 | to a video server, telemetry burned in | `./ipc stream 0 rtmp://server/app/cam0` | `./ipc receive rtmp://server/app/cam0` |
 | record to a file instead | `./ipc stream 0 cam0.mkv` | `./ipc receive cam0.mkv` |
 
-With the base station, `./ipc flash base` sends the telemetry to the PC it runs on, and remembers the base station's address for `view` and `stream`. The base station has room for about three video streams at once in total: a browser showing three cameras, or a mix of browsers and streams.
+With the base station, `./ipc flash base` sends the telemetry to the PC it runs on, offers to let it through that PC's firewall, and remembers the base station's address for `view` and `stream`. The base station has room for about three video streams at once in total: a browser showing three cameras, or a mix of browsers and streams.
 
-With this PC's adapter, `./ipc receive` picks the adapter itself and asks for your password (the adapter is switched to monitor mode). While it receives, the adapter can't be used for the network; if it's the PC's connection, it asks first. Ctrl-C gives it back.
+With this PC's adapter, `./ipc receive` picks an adapter that can receive and asks for your password (the adapter is switched to monitor mode). While it receives, the adapter can't be used for the network; if it's the PC's connection, it asks first. Ctrl-C gives it back.
+
+### 4. Your own keys (before you rely on it)
+
+Out of the box everything uses the repo's shared test keys: anyone with this repo can watch your cameras and send into the link. Make your own pair, then flash every board again:
+
+```sh
+./ipc keys                # asks for a password; the same password gives the same keys on another PC
+./ipc flash camera 0      # and every other camera, and the base station
+```
+
+The keys go in `keys/own/`, which git ignores. A PC that receives or sends with its own WiFi adapter needs the same keys: run `./ipc keys` there with the same password (or copy `keys/own/`). `./ipc keys reset` goes back to the test keys.
 
 ### Something wrong?
 
@@ -60,13 +71,14 @@ With this PC's adapter, `./ipc receive` picks the adapter itself and asks for yo
 | `flash` waits and finds no board | use a USB data cable; or name the port: `./ipc flash camera 1 --port /dev/ttyUSB0` |
 | flashing says permission denied | join the group `./ipc setup` names, then log out and back in |
 | a board doesn't do what you expect | `./ipc log` shows what it's doing |
-| "NO TELEMETRY" on the video | the base station sends telemetry to the PC that ran `./ipc flash base`; run it again on this one. A firewall must let it in: `sudo ufw allow from <base station> to any port 5600:5612 proto udp` |
+| "NO TELEMETRY" on the video | the base station sends telemetry to the PC that ran `./ipc flash base`, through its firewall; run `./ipc flash base` again on this PC and say yes to the firewall |
 | the picture breaks up or stutters | keep each camera a metre or more from the receiver (closer overloads it); weak antennas on the ESP32-CAM board shorten the range |
 | `./ipc receive` finds no adapter | built-in Intel cards can't receive; see Which WiFi adapter |
+| nothing arrives after `./ipc keys` | every board, and every PC with its own adapter, must have the same keys: flash them again, and run `./ipc keys` with the same password on the other PC |
 
 ## Which WiFi adapter
 
-The base station and the cameras need nothing extra. A PC needs a WiFi adapter that works in monitor mode in its role:
+The base station and the cameras need nothing extra. A PC needs a WiFi adapter that works in monitor mode in its role; `./ipc` (and `tx.sh`, `rx.sh`) pick a suitable one by themselves:
 
 - **To receive:** a Ralink RT5572 USB stick works (its `rt2800usb` driver is in the kernel). RTL8812AU/EU and AR9271 adapters work too, and can also send. **Built-in Intel cards can't receive** in monitor mode.
 - **To send** (the PC-to-PC link): an Intel card can, on 2.4 GHz only (it refuses 5 GHz channel 36), so keep `CHANNEL=6`. RTL8812AU/EU and AR9271 adapters can send as well.
@@ -74,28 +86,28 @@ The base station and the cameras need nothing extra. A PC needs a WiFi adapter t
 ## The PC-to-PC link
 
 ```sh
-./tx.sh     # on the sending PC: its webcam, over its WiFi adapter
-./rx.sh     # on the receiving PC: the video window
+./ipc send       # on the sending PC: its webcam (or a test pattern) over its WiFi adapter
+./ipc receive    # on the receiving PC: the video window
 ```
 
-Run both as your normal user; they ask for the password themselves. Each one runs its half of the radio link plus the sender or receiver, and everything stops on Ctrl-C, when you close its window, or when the radio link stops. `tx.sh` shows a preview of what is sent and `rx.sh` shows what arrives. The WiFi adapter is offline while the link runs. wfb-ng is built on first run (`./ipc setup` says which packages that needs).
+Both pick a WiFi adapter that can do their part, and ask for your password. Each runs its half of the radio link plus the sender or the video window; everything stops on Ctrl-C, when you close its window, or when the radio link stops. The sending PC shows a preview of what it sends. The WiFi adapter is offline while the link runs. `./ipc receive` tells the webcam's H.264 from a camera's JPEG by itself. Both PCs need the same keys (step 4).
 
-By default the sender uses `wlan0` and the receiver `wlan1`, on channel 6. Pass these as environment variables in front of `./tx.sh` / `./rx.sh`:
+Underneath they run `tx.sh` and `rx.sh`, which can be used directly too. These environment variables in front of `./tx.sh`, `./rx.sh` or `./ipc send` / `receive` change the link:
 
 | variable | default | meaning |
 |---|---|---|
 | `CHANNEL` | 6 | WiFi channel, must match on both ends; keep it on 2.4 GHz when an Intel card sends |
-| `TX_IF` / `RX_IF` | wlan0 / wlan1 | WiFi interface to use; if missing, the machine's first WiFi interface |
+| `TX_IF` / `RX_IF` | picked | the WiFi interface to send / receive with, e.g. `RX_IF=wlan1` |
 | `TX_POWER` | 2000 | transmit power in mBm (2000 = 20 dBm); some cards ignore it |
 | `MCS` | 3 | radio data rate (HT20 MCS 3 = 26 Mbit/s) |
 
-`sender.sh` also reads `SOURCE=webcam|test`, `ENCODER=x264|vaapi`, `SIZE=1280x720`, `FPS=30`, `BITRATE=4M`, `DEVICE` and `PREVIEW=1`. `receiver.sh` reads `PLAYER=auto|gst|ffplay` and `VIDEO=h264|jpeg` (`jpeg` for the ESP32-CAM's RTP/JPEG). The GStreamer receiver needs gst-plugins-base, -good, -bad and gst-libav; if any are missing, it falls back to ffplay.
+`sender.sh` also reads `SOURCE=webcam|test`, `ENCODER=x264|vaapi`, `SIZE=1280x720`, `FPS=30`, `BITRATE=4M`, `DEVICE` and `PREVIEW=1`. `receiver.sh` reads `PLAYER=auto|gst|ffplay` and `VIDEO=h264|jpeg|auto` (`jpeg` for the ESP32-CAM's RTP/JPEG, `auto` to tell by the first packet). The GStreamer receiver needs gst-plugins-base, -good, -bad and gst-libav; if any are missing, it falls back to ffplay.
 
 Without a radio link, `./receiver.sh` and `./sender.sh` (port 5600) stream over localhost.
 
 ## Keys
 
-`keys/` holds test keys derived from the password `change-me` (`cd keys && ../wfb-ng/wfb_keygen change-me`). The same password always gives the same pair, so every clone can talk to every other. The sender uses `drone.key` (built into the camera firmware) and the receiver uses `gs.key` (built into the base station). For anything beyond desk tests, generate your own pair with a real password (or none, for a random pair), copy it to both ends and flash the boards again. Anyone with these test keys can read and inject into the link.
+`keys/drone.key` (the sending end: the cameras, `./ipc send`) and `keys/gs.key` (the receiving end: the base station, `./ipc receive`) are the repo's shared test keys, from the password `change-me`. Your own pair from `./ipc keys` goes in `keys/own/` and takes their place everywhere: in the firmware when a board is flashed next, and in the PC link at once. It never goes into git.
 
 ## Measure latency
 
@@ -121,9 +133,10 @@ Take several photos and average them. A 60 Hz screen limits each reading to abou
 
 | script | does |
 |---|---|
-| `ipc` | the front door: setup, flash, view, stream, receive, log |
+| `ipc` | the front door: setup, flash, view, stream, receive, send, keys, test, log |
 | `tx.sh` / `rx.sh` | one command per PC for the PC-to-PC link (link + sender/receiver) |
 | `link.sh [tx\|rx]` | puts the adapter in monitor mode and runs `wfb_tx` / `wfb_rx` (needs sudo); `rx` also receives camera 0's telemetry (UDP 5610) and keeps the latest signal stats in `/tmp/open-ipc-rx.stats` |
+| `wifi.sh` | which WiFi adapter sends or receives, and which keys: used by `link.sh` and `ipc` |
 | `sender.sh` | webcam or test pattern → H.264 → RTP; burns a `TX hh:mm:ss.mmm` timestamp into each frame |
 | `receiver.sh` | RTP → low-latency video window |
 | `burnin.sh` | a camera's video with its telemetry and signal quality burned in, as H.264: to RTMP, a file, or a window. Reads `FPS=25`, `BITRATE=2M`, `PORT`, `TELEMETRY_PORT`, `STATS_FILE`, and `VIDEO_IN=rtsp://...` for the base station's streams |
