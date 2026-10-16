@@ -6,7 +6,22 @@ Webcam → H.264 → wfb-ng (the OpenIPC FPV radio link) → another computer's 
 tx machine: webcam → sender.sh → :5602 → wfb_tx → WiFi ))) ((( WiFi → wfb_rx → :5600 → receiver.sh :rx machine
 ```
 
-## Quick start (the setup that works)
+## Start here: cameras and the base station
+
+One command, `./ipc`, does the everyday things. Run it on its own to see the list.
+
+| to | run |
+|---|---|
+| set up a camera (once per camera; 0, 1 or 2) | `./ipc flash camera 1`, then plug the camera in when it asks |
+| set up the base station (the ESP32-POE, with its Ethernet cable in) | `./ipc flash base`, then plug it in when it asks |
+| watch every camera, live, in a browser | `./ipc view` |
+| send a camera to the video server, telemetry burned in | `./ipc stream 0 rtmp://server/app/cam0` |
+| see what a plugged-in board is doing | `./ipc log` |
+| first time on a new PC | `./ipc setup` |
+
+Flashing finds the board's USB port by itself, checks the board starts, and says what to do next. After flashing, a camera only needs power from any USB charger. Use a USB data cable: with a charge-only cable no port appears. The rest of this README covers the original PC-to-PC link and how everything works.
+
+## Quick start: the PC-to-PC link
 
 ```sh
 ./tx.sh     # XPS: sends its webcam with its built-in Intel WiFi card (wlan0)
@@ -98,6 +113,7 @@ Pass these as environment variables in front of `./tx.sh` / `./rx.sh`:
 
 | script | does |
 |---|---|
+| `ipc` | the front door for the cameras and the base station: flash, view, stream, log, setup (see Start here) |
 | `tx.sh` / `rx.sh` | one command per machine (link + sender/receiver) |
 | `link.sh [tx\|rx]` | puts the card in monitor mode and runs `wfb_tx` / `wfb_rx` (needs sudo); with no argument, runs both ends on one machine with two cards (untested: on the NUC that means Intel sending, Ralink receiving) |
 | `sender.sh` | webcam or test pattern → H.264 → RTP; burns a `TX hh:mm:ss.mmm` timestamp into each frame |
