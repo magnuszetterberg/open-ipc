@@ -9,19 +9,29 @@ BASE_FILE=$STATE/base-address       # the base station's address, saved by "flas
 BOARDS_FILE=$STATE/boards           # which board was flashed in which USB socket, for "log"
 
 usage() {
-  cat <<'EOF'
+  cat <<'END'
 open-ipc: what do you want to do?
 
-  ./ipc flash camera N        set up camera N (0, 1 or 2): plug it in when asked
-  ./ipc flash base            set up the base station (the ESP32-POE)
-  ./ipc view                  open the base station's web page: every camera, live
-  ./ipc stream N URL          camera N to the video server (rtmp://...) with its telemetry
-                              burned in; or a file name (cam0.mkv) to record, or nothing for a window
-  ./ipc log                   show what a board plugged into this PC is doing
-  ./ipc setup                 first time on a new PC: installs the tools
+Set up the boards (once each):
+  ./ipc flash camera N     a camera, N = 0, 1 or 2: plug it in when asked
+  ./ipc flash base         the base station (ESP32-POE): plug it in when asked
 
-  Add --port /dev/ttyUSBx to "flash" or "log" to name the port instead of plugging in.
-EOF
+Receive with the base station (up to 3 cameras, anywhere on the LAN):
+  ./ipc view               every camera, live, in a browser
+  ./ipc stream N URL       camera N to a video server (rtmp://...) with its telemetry burned in;
+                           or a file name (cam0.mkv) to record, or nothing for a window
+
+Or receive with this PC's own WiFi adapter (camera 0 only, no base station):
+  ./ipc receive            camera 0 in a window
+  ./ipc receive URL        camera 0 to a video server (rtmp://...) with its telemetry burned in;
+                           or a file name (cam0.mkv) to record
+
+Other:
+  ./ipc log                what a board plugged into this PC is doing
+  ./ipc setup              first time on a new PC: installs the tools
+
+Add --port /dev/ttyUSBx to "flash" or "log" to name the port instead of plugging in.
+END
 }
 
 say() { printf '%s\n' "$*"; }
@@ -168,6 +178,83 @@ pick_port() {
   esac
 }
 
+# WiFi adapters that receive wfb-ng in monitor mode (README: which WiFi adapter). Intel (iwlwifi) can't.
+GOOD_RX_DRIVERS="rt2800usb rtl88xxau rtl88XXau 88XXau rtl8812au rtl88x2eu 8812eu ath9k_htc"
+
+driver_of() {
+  basename "$(readlink -f "/sys/class/net/$1/device/driver" 2>/dev/null)"
+}
+
+# The WiFi adapter to receive with: one that can, preferring the drivers known to work. Prints its name.
+pick_receiver() {
+  local i name candidates=() good=()
+  for i in /sys/class/net/*; do
+    [[ -d $i/wireless || -d $i/phy80211 ]] || continue
+    name=$(basename "$i")
+    [[ $(driver_of "$name") == iwlwifi ]] && continue
+    candidates+=("$name")
+    [[ " $GOOD_RX_DRIVERS " == *" $(driver_of "$name") "* ]] && good+=("$name")
+  done
+  if ((${#good[@]} == 1)); then
+    printf '%s\n' "${good[0]}"
+  elif ((${#candidates[@]} == 1)); then
+    say "${candidates[0]}'s adapter isn't one known to receive; if nothing arrives, see the README (which WiFi adapter)." >&2
+    printf '%s\n' "${candidates[0]}"
+  elif ((${#candidates[@]} == 0)); then
+    die "this PC has no WiFi adapter that can receive (Intel cards can't). Plug in one that can (a Ralink RT5572,
+     RTL8812AU/EU or AR9271 USB adapter), or receive with the base station instead (./ipc flash base)."
+  else
+    say "More than one WiFi adapter could receive:" >&2
+    local n=1
+    for i in "${candidates[@]}"; do
+      say "  $n) $i ($(driver_of "$i"))" >&2
+      n=$((n + 1))
+    done
+    read -rp "Which one? " n
+    [[ $n =~ ^[0-9]+$ && $n -ge 1 && $n -le ${#candidates[@]} ]] || die "no such adapter"
+    printf '%s\n' "${candidates[$((n - 1))]}"
+  fi
+}
+
+# Camera 0 straight to this PC's WiFi adapter, no base station: link.sh rx and a window (rx.sh), or burnin.sh.
+receive() {
+  local out=$1 iface ok
+  iface=$(pick_receiver)
+  say "Receiving camera 0 with $iface ($(driver_of "$iface"))."
+  if ip -4 -o addr show dev "$iface" 2>/dev/null | grep -q inet; then
+    say "  $iface is this PC's network connection right now. Receiving takes it over, so the PC is off"
+    say "  that network until you stop (Ctrl-C gives it back)."
+    if [[ -t 0 ]]; then
+      read -rp "  Go ahead? [y/N] " ok
+      [[ $ok == [yY]* ]] || exit 1
+    fi
+  fi
+  say "It asks for your password: the adapter is switched to monitor mode. Ctrl-C stops."
+  if [[ -z $out ]]; then
+    RX_IF=$iface VIDEO=jpeg exec ./rx.sh
+  fi
+
+  # To a server or a file, telemetry burned in: as rx.sh runs the link, with burnin.sh instead of the window.
+  ./build.sh
+  sudo -v
+  while sleep 60; do sudo -n -v; done &
+  RECEIVE_KEEPALIVE=$!
+  RECEIVE_LINK=""
+  trap stop_receive EXIT
+  trap 'exit 130' INT TERM
+  sudo env RX_IF="$iface" ./link.sh rx &
+  RECEIVE_LINK=$!
+  sleep 2
+  ./burnin.sh "$out" || true
+}
+
+stop_receive() {
+  trap '' INT TERM
+  sudo pkill -TERM -f '[l]ink.sh rx' || true  # [l] keeps pkill from matching its own sudo
+  if [[ -n ${RECEIVE_LINK:-} ]]; then wait "$RECEIVE_LINK" 2>/dev/null || true; fi
+  kill "${RECEIVE_KEEPALIVE:-}" 2>/dev/null || true
+}
+
 # First time on a PC: what flashing needs, then the extras, each saying what it's for.
 setup() {
   if [[ ! -f wfb-ng/src/wifibroadcast.hpp ]]; then
@@ -226,6 +313,7 @@ case "${1:-} ${2:-}" in
     say "  (\"NO TELEMETRY\" on the video: the base station sends it to another PC, or this PC's firewall drops it;"
     say "   ./ipc flash base sets it up for this PC.)"
     VIDEO_IN=rtsp://$addr:8554/cam$n TELEMETRY_PORT=$((5610 + n)) exec ./burnin.sh "${3:-}" ;;
+  "receive "*) receive "${2:-}" ;;
   "log "*) [[ -n $port ]] || port=$(pick_port); exec esp32/monitor.sh "$port" -t ;;
   "setup "*) setup ;;
   " ") usage ;;
