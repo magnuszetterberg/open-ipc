@@ -253,9 +253,43 @@ rtp_jpeg_status rtp_jpeg_packetizer::send_frame(const uint8_t *jpeg, size_t size
     return RTP_JPEG_OK;
 }
 
-rtp_jpeg_depacketizer::rtp_jpeg_depacketizer(uint8_t *frame, size_t frame_size, uint8_t *scan, size_t scan_size)
-    : frame(frame), frame_cap(frame_size), scan(scan), scan_cap(scan_size)
+// The fields of one RTP/JPEG packet that the receiving side needs.
+struct rtp_jpeg_fields
 {
+    bool marker;
+    uint32_t timestamp;
+    size_t offset;
+    uint8_t type;
+    int width, height;
+    const uint8_t *qtables;  // in-band tables (first packet, Q >= 128), else null
+    const uint8_t *data;     // scan data
+    size_t data_size;
+};
+
+static bool parse_packet(const uint8_t *packet, size_t size, rtp_jpeg_fields *f)
+{
+    if (size < RTP_HEADER + JPEG_HEADER || (packet[0] & 0xc0) != 0x80)
+    {
+        return false;
+    }
+    const uint8_t *j = packet + RTP_HEADER;
+    f->marker = packet[1] & 0x80;
+    f->timestamp = (uint32_t)packet[4] << 24 | packet[5] << 16 | packet[6] << 8 | packet[7];
+    f->offset = (size_t)j[1] << 16 | j[2] << 8 | j[3];
+    f->type = j[4];
+    f->width = j[6] * 8;
+    f->height = j[7] * 8;
+    f->qtables = nullptr;
+    f->data = j + JPEG_HEADER;
+    f->data_size = size - RTP_HEADER - JPEG_HEADER;
+    // Only in-band 8-bit tables, as the packetizer sends them
+    if (f->offset == 0 && j[5] >= 128 && f->data_size >= QUANT_HEADER && f->data[1] == 0 && be16(f->data + 2) == 128)
+    {
+        f->qtables = f->data + 4;
+        f->data += QUANT_HEADER;
+        f->data_size -= QUANT_HEADER;
+    }
+    return true;
 }
 
 // Appends bytes to out, if they fit.
@@ -270,60 +304,8 @@ static bool put(uint8_t *out, size_t cap, size_t *n, const void *data, size_t si
     return true;
 }
 
-size_t rtp_jpeg_depacketizer::push(const uint8_t *packet, size_t size)
+size_t jpeg_headers(uint8_t *out, size_t cap, uint8_t type, int width, int height, const uint8_t *qtables)
 {
-    if (size < RTP_HEADER + JPEG_HEADER || (packet[0] & 0xc0) != 0x80)
-    {
-        return 0;
-    }
-    bool marker = packet[1] & 0x80;
-    uint32_t ts = (uint32_t)packet[4] << 24 | packet[5] << 16 | packet[6] << 8 | packet[7];
-    const uint8_t *j = packet + RTP_HEADER;
-    size_t offset = (size_t)j[1] << 16 | j[2] << 8 | j[3];
-    const uint8_t *data = j + JPEG_HEADER;
-    size_t data_size = size - RTP_HEADER - JPEG_HEADER;
-
-    if (offset == 0)
-    {
-        if (collecting)
-        {
-            frames_dropped++;  // the previous frame never got its last packet
-        }
-        collecting = false;
-        if (j[5] < 128 || data_size < QUANT_HEADER || data[1] != 0 || be16(data + 2) != 128)
-        {
-            frames_dropped++;  // only in-band 8-bit tables, as the packetizer sends them
-            return 0;
-        }
-        memcpy(qtables, data + 4, 128);
-        data += QUANT_HEADER;
-        data_size -= QUANT_HEADER;
-        collecting = true;
-        timestamp = ts;
-        type = j[4];
-        width = j[6] * 8;
-        height = j[7] * 8;
-        scan_size = 0;
-    }
-    if (!collecting)
-    {
-        return 0;
-    }
-    if (ts != timestamp || offset != scan_size || scan_size + data_size > scan_cap)
-    {
-        frames_dropped++;  // a packet went missing, or the frame doesn't fit
-        collecting = false;
-        return 0;
-    }
-    memcpy(scan + scan_size, data, data_size);
-    scan_size += data_size;
-    if (!marker)
-    {
-        return 0;
-    }
-    collecting = false;
-
-    // A JPEG file around the scan: SOI, DQT, SOF0, DHT, SOS, scan, EOI
     size_t n = 0;
     const uint8_t soi[] = {0xff, 0xd8};
     const uint8_t dqt[] = {0xff, 0xdb, 0, 2 + 2 * 65};
@@ -333,22 +315,131 @@ size_t rtp_jpeg_depacketizer::push(const uint8_t *packet, size_t size)
                            sizeof(jpeg_dht_chroma_ac);
     const uint8_t dht[] = {0xff, 0xc4, (uint8_t)(dht_len >> 8), (uint8_t)dht_len};
     const uint8_t sos[] = {0xff, 0xda, 0, 12, 3, 1, 0x00, 2, 0x11, 3, 0x11, 0, 63, 0};
-    const uint8_t eoi[] = {0xff, 0xd9};
     uint8_t id0 = 0, id1 = 1;
-    bool ok = put(frame, frame_cap, &n, soi, sizeof(soi)) && put(frame, frame_cap, &n, dqt, sizeof(dqt)) &&
-              put(frame, frame_cap, &n, &id0, 1) && put(frame, frame_cap, &n, qtables, 64) &&
-              put(frame, frame_cap, &n, &id1, 1) && put(frame, frame_cap, &n, qtables + 64, 64) &&
-              put(frame, frame_cap, &n, sof, sizeof(sof)) && put(frame, frame_cap, &n, dht, sizeof(dht)) &&
-              put(frame, frame_cap, &n, jpeg_dht_luma_dc, sizeof(jpeg_dht_luma_dc)) &&
-              put(frame, frame_cap, &n, jpeg_dht_luma_ac, sizeof(jpeg_dht_luma_ac)) &&
-              put(frame, frame_cap, &n, jpeg_dht_chroma_dc, sizeof(jpeg_dht_chroma_dc)) &&
-              put(frame, frame_cap, &n, jpeg_dht_chroma_ac, sizeof(jpeg_dht_chroma_ac)) &&
-              put(frame, frame_cap, &n, sos, sizeof(sos)) && put(frame, frame_cap, &n, scan, scan_size) &&
-              put(frame, frame_cap, &n, eoi, sizeof(eoi));
-    if (!ok)
+    bool ok = put(out, cap, &n, soi, sizeof(soi)) && put(out, cap, &n, dqt, sizeof(dqt)) &&
+              put(out, cap, &n, &id0, 1) && put(out, cap, &n, qtables, 64) && put(out, cap, &n, &id1, 1) &&
+              put(out, cap, &n, qtables + 64, 64) && put(out, cap, &n, sof, sizeof(sof)) &&
+              put(out, cap, &n, dht, sizeof(dht)) && put(out, cap, &n, jpeg_dht_luma_dc, sizeof(jpeg_dht_luma_dc)) &&
+              put(out, cap, &n, jpeg_dht_luma_ac, sizeof(jpeg_dht_luma_ac)) &&
+              put(out, cap, &n, jpeg_dht_chroma_dc, sizeof(jpeg_dht_chroma_dc)) &&
+              put(out, cap, &n, jpeg_dht_chroma_ac, sizeof(jpeg_dht_chroma_ac)) && put(out, cap, &n, sos, sizeof(sos));
+    return ok ? n : 0;
+}
+
+static const uint8_t jpeg_eoi[] = {0xff, 0xd9};
+
+rtp_jpeg_depacketizer::rtp_jpeg_depacketizer(uint8_t *frame, size_t frame_size, uint8_t *scan, size_t scan_size)
+    : frame(frame), frame_cap(frame_size), scan(scan), scan_cap(scan_size)
+{
+}
+
+size_t rtp_jpeg_depacketizer::push(const uint8_t *packet, size_t size)
+{
+    rtp_jpeg_fields f;
+    if (!parse_packet(packet, size, &f))
+    {
+        return 0;
+    }
+    if (f.offset == 0)
+    {
+        if (collecting)
+        {
+            frames_dropped++;  // the previous frame never got its last packet
+        }
+        collecting = false;
+        if (f.qtables == nullptr)
+        {
+            frames_dropped++;
+            return 0;
+        }
+        memcpy(qtables, f.qtables, 128);
+        collecting = true;
+        timestamp = f.timestamp;
+        type = f.type;
+        width = f.width;
+        height = f.height;
+        scan_size = 0;
+    }
+    if (!collecting)
+    {
+        return 0;
+    }
+    if (f.timestamp != timestamp || f.offset != scan_size || scan_size + f.data_size > scan_cap)
+    {
+        frames_dropped++;  // a packet went missing, or the frame doesn't fit
+        collecting = false;
+        return 0;
+    }
+    memcpy(scan + scan_size, f.data, f.data_size);
+    scan_size += f.data_size;
+    if (!f.marker)
+    {
+        return 0;
+    }
+    collecting = false;
+
+    // A JPEG file around the scan: the headers, the scan, EOI
+    size_t n = jpeg_headers(frame, frame_cap, type, width, height, qtables);
+    if (n == 0 || !put(frame, frame_cap, &n, scan, scan_size) || !put(frame, frame_cap, &n, jpeg_eoi, sizeof(jpeg_eoi)))
     {
         frames_dropped++;
         return 0;
     }
     return n;
+}
+
+rtp_jpeg_streamer::rtp_jpeg_streamer(jpeg_stream_sink &sink) : sink(sink)
+{
+}
+
+void rtp_jpeg_streamer::push(const uint8_t *packet, size_t size)
+{
+    rtp_jpeg_fields f;
+    if (!parse_packet(packet, size, &f))
+    {
+        return;
+    }
+    if (f.offset == 0)
+    {
+        if (streaming)
+        {
+            streaming = false;  // the previous frame never got its last packet
+            frames_cut++;
+            sink.jpeg_end(false);
+        }
+        size_t n = f.qtables ? jpeg_headers(headers, sizeof(headers), f.type, f.width, f.height, f.qtables) : 0;
+        if (n == 0)
+        {
+            frames_cut++;
+            return;
+        }
+        streaming = true;
+        timestamp = f.timestamp;
+        next_offset = 0;
+        sink.jpeg_begin();
+        sink.jpeg_data(headers, n);
+    }
+    if (!streaming)
+    {
+        return;  // joined mid-frame: wait for the next one
+    }
+    if (f.timestamp != timestamp || f.offset != next_offset)
+    {
+        streaming = false;  // a packet went missing
+        frames_cut++;
+        sink.jpeg_end(false);
+        return;
+    }
+    if (f.data_size > 0)
+    {
+        sink.jpeg_data(f.data, f.data_size);
+    }
+    next_offset += f.data_size;
+    if (f.marker)
+    {
+        sink.jpeg_data(jpeg_eoi, sizeof(jpeg_eoi));
+        streaming = false;
+        frames++;
+        sink.jpeg_end(true);
+    }
 }
