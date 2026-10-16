@@ -5,11 +5,13 @@ Digital video links over [wfb-ng](https://github.com/svpcom/wfb-ng), the long-ra
 - **ESP32 cameras and a base station.** ESP32-CAM boards send JPEG video and telemetry over wfb-ng. An ESP32 with Ethernet (the Olimex ESP32-POE) receives up to three of them and serves each camera on the LAN: in a web page with its telemetry, as RTSP, and its telemetry as UDP.
 - **To a video server.** A PC burns each camera's telemetry and signal quality into its video, encodes H.264 and pushes it to an RTMP server.
 - **PC to PC.** A webcam on one Linux PC, encoded as H.264, to another PC's screen, with off-the-shelf WiFi adapters.
+- **A radar camera.** An NXP FRDM-RW612 board with the SR250 UWB radar shield sends what it detects (something moving, and how far away) as a camera's picture and telemetry, so it shows wherever a camera shows, and can go next to a camera's video. It sees in the dark and shows no faces.
 
 ```
 ESP32-CAM 0..2 ─ wfb-ng, 2.4 GHz ─► base station (ESP32 + Ethernet) ─► LAN: web page, RTSP, telemetry
                                                                       └► PC: telemetry burned in, H.264 ─► RTMP server
 ESP32-CAM 0 ─── wfb-ng, 2.4 GHz ─► a PC's own WiFi adapter (no base station)
+FRDM-RW612 + SR250 radar ─ wfb-ng, as camera 2 ─► the base station or a PC's adapter, like any camera
 
 sending PC: webcam → sender.sh → wfb_tx → WiFi ))) ((( WiFi → wfb_rx → receiver.sh :receiving PC
 ```
@@ -44,7 +46,7 @@ Each one asks you to plug the board in, finds its USB port, flashes it, checks t
 | | with the base station | with this PC's WiFi adapter |
 |---|---|---|
 | you need | an Olimex ESP32-POE, with an Ethernet cable to your network | a USB WiFi adapter that receives in monitor mode (see Which WiFi adapter) |
-| cameras | up to 3 | camera 0 |
+| cameras | up to 3 | one at a time: camera 0, or `./ipc receive N` |
 | watch | `./ipc view`: every camera in a browser, on any device on the network | `./ipc receive`: camera 0 in a window on this PC |
 | to a video server, telemetry burned in | `./ipc stream 0 rtmp://server/app/cam0` | `./ipc receive rtmp://server/app/cam0` |
 | record to a file instead | `./ipc stream 0 cam0.mkv` | `./ipc receive cam0.mkv` |
@@ -64,6 +66,27 @@ Out of the box everything uses the repo's shared test keys: anyone with this rep
 
 The keys go in `keys/own/`, which git ignores. A PC that receives or sends with its own WiFi adapter needs the same keys: run `./ipc keys` there with the same password (or copy `keys/own/`). `./ipc keys reset` goes back to the test keys.
 
+### A radar camera (optional)
+
+You need an [NXP FRDM-RW612](https://www.nxp.com/FRDM-RW612) board and the [SR250 radar shield](https://www.nxp.com/SR250UWBSHIELD) on its Arduino headers. The board doesn't connect the shield's SPI data lines out of the box: add two jumper wires on the board's header, **D0 to D11** and **D1 to D12** (NXP's picture: [FRDM-RW612_rework_alternative.png](https://github.com/nxp-appcodehub/an-sr250-uwb-plug-and-play-demo/blob/main/images/FRDM-RW612_rework_alternative.png)). Plug the board's MCU-Link USB-C (J10) into this PC.
+
+```sh
+./ipc setup radar     # its tools: Zephyr and its compiler, about 2 GB; it says what else it needs, once
+./ipc flash radar     # as camera 2; ./ipc flash radar 1 for another number
+```
+
+`./ipc setup radar` also says how to get SEGGER's J-Link tools (flashing goes through the board's J-Link) and gives the one sudo command that lets your user reach the J-Link. After flashing, the board only needs power.
+
+It is then camera 2, wherever cameras show: in `./ipc view`, or `./ipc receive 2` with this PC's adapter. The picture says what moves and how far away, shows the movement against distance (0 to 8 m), and the distance over the last 20 seconds; walk towards it and away to see it follow you. Distances count from the radar itself, at about 15 cm steps. What it finds also goes out as telemetry (`moving`, `distance_m`), and the base station passes that on with the other cameras' telemetry.
+
+To put it next to a camera, in one video to the video server (or a file, or a window):
+
+```sh
+./ipc stream 0 rtmp://server/app/cam0 --radar 2
+```
+
+Camera 0 with its telemetry and a line with the radar's finding ("RADAR moving at 2.31 m"), the radar's picture beside it. With `RADAR_VIEW=text` in front, only the line.
+
 ### Something wrong?
 
 | what you see | what to do |
@@ -75,6 +98,8 @@ The keys go in `keys/own/`, which git ignores. A PC that receives or sends with 
 | the picture breaks up or stutters | keep each camera a metre or more from the receiver (closer overloads it); weak antennas on the ESP32-CAM board shorten the range |
 | `./ipc receive` finds no adapter | built-in Intel cards can't receive; see Which WiFi adapter |
 | nothing arrives after `./ipc keys` | every board, and every PC with its own adapter, must have the same keys: flash them again, and run `./ipc keys` with the same password on the other PC |
+| `./ipc flash radar`: "this user can't reach the board's J-Link" | run the two sudo commands it prints, once, then unplug and plug the board in again |
+| `./ipc flash radar`: "the SR250 doesn't answer" | the shield isn't seated on all four headers, or the jumper wires D0–D11 and D1–D12 are missing or loose |
 
 ## Which WiFi adapter
 
@@ -133,18 +158,19 @@ At the top there is only `./ipc`, which covers the everyday tasks. What it uses 
 
 | script | does |
 |---|---|
-| `ipc` | the front door: setup, flash, view, stream, receive, send, keys, test, wfb-ng, log |
+| `ipc` | the front door: setup, flash (cameras, base, radar), view, stream, receive, send, keys, test, wfb-ng, log |
 | `pc/tx.sh` / `pc/rx.sh` | one command per PC for the PC-to-PC link (link + sender/receiver) |
-| `pc/link.sh [tx\|rx]` | puts the adapter in monitor mode and runs `wfb_tx` / `wfb_rx` (needs sudo); `rx` also receives camera 0's telemetry (UDP 5610) and keeps the latest signal stats in `/tmp/open-ipc-rx.stats` |
+| `pc/link.sh [tx\|rx]` | puts the adapter in monitor mode and runs `wfb_tx` / `wfb_rx` (needs sudo); `rx` receives camera 0 (`CAM=N` another), and its telemetry on UDP 5610, and keeps the latest signal stats in `/tmp/open-ipc-rx.stats` |
 | `pc/wifi.sh` | which WiFi adapter sends or receives, and which keys: used by `link.sh` and `ipc` |
 | `pc/sender.sh` | webcam or test pattern → H.264 → RTP; burns a `TX hh:mm:ss.mmm` timestamp into each frame (`overlay.txt`) |
 | `pc/receiver.sh` | RTP → low-latency video window |
-| `pc/burnin.sh` | a camera's video with its telemetry and signal quality burned in, as H.264: to RTMP, a file, or a window. Reads `FPS=25`, `BITRATE=2M`, `PORT`, `TELEMETRY_PORT`, `STATS_FILE`, and `VIDEO_IN=rtsp://...` for the base station's streams |
+| `pc/burnin.sh` | a camera's video with its telemetry and signal quality burned in, as H.264: to RTMP, a file, or a window. Reads `FPS=25`, `BITRATE=2M`, `PORT`, `TELEMETRY_PORT`, `STATS_FILE`, and `VIDEO_IN=rtsp://...` for the base station's streams; `RADAR=N` and `RADAR_IN=rtsp://...` add the radar camera (`RADAR_VIEW=beside` or `text`, `HEIGHT=480`) |
+| `pc/radar_view.py` | the radar's raw measurements in a browser page, for working on the radar itself (the firmware's "raw measurements" setting) |
 | `pc/telemetry_overlay.py` | keeps the overlay text for `burnin.sh` |
 | `pc/build-wfb-ng.sh` | fetches and builds wfb-ng if needed |
 | `pc/sniff.sh [iface]` | counts what an adapter hears in monitor mode, to check it can receive at all |
 | `pc/clock.html` | millisecond clock for latency photos |
-| `esp32/` | the firmware, its build and test scripts ([esp32/README.md](esp32/README.md)) |
+| `esp32/` | the firmware (cameras, base station, radar camera), its build and test scripts ([esp32/README.md](esp32/README.md)) |
 
 ## Keeping up with wfb-ng
 
