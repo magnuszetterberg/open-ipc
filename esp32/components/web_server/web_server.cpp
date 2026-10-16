@@ -124,6 +124,10 @@ void web_server::flush(web_client &c)
     {
         const void *data = c.out_len > 0 ? (const void *)c.out : (const void *)c.body;
         size_t size = c.out_len > 0 ? c.out_len : c.body_left;
+        if (config.may_send != nullptr && !config.may_send(size))
+        {
+            return;  // later: poll() tries again
+        }
         ssize_t n = send(c.fd, data, size, MSG_NOSIGNAL);
         if (n <= 0)
         {

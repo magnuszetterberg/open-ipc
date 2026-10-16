@@ -16,6 +16,9 @@ struct web_config
     uint16_t port = 80;
     int max_clients = 4;          // MJPEG viewers, page and status requests together
     size_t client_buffer = 4096;  // per client: response headers, the status document, MJPEG waiting for TCP
+    // Asked before data is handed to TCP, whose buffers come from the heap: false keeps it waiting here. The
+    // base station says no while RAM runs low, so viewers can't starve its radio. Null: always yes.
+    bool (*may_send)(size_t size) = nullptr;
 };
 
 struct web_client;

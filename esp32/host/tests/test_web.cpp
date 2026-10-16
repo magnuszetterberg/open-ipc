@@ -367,5 +367,35 @@ int main()
         close(stuck);
         close(good);
     }
+
+    // may_send says no (the base station low on RAM): the reply waits in the server; then it goes
+    {
+        static bool allow = false;
+        web_server held;
+        web_config cfg;
+        cfg.port = free_tcp_port();
+        cfg.max_clients = 2;
+        cfg.client_buffer = 4096;
+        cfg.may_send = [](size_t) { return allow; };
+        CHECK(held.start(cfg, names, 3));
+        held.set_status(status, sizeof(status) - 1);
+        int fd = connect_to(cfg.port, "GET /status.json HTTP/1.1\r\n\r\n");
+        std::string got;
+        for (uint64_t end = now_us() + 300000; now_us() < end;)
+        {
+            held.poll(5);
+            read_some(fd, &got);
+        }
+        CHECK(got.empty());
+        allow = true;
+        for (uint64_t end = now_us() + 300000; now_us() < end;)
+        {
+            held.poll(5);
+            read_some(fd, &got);
+        }
+        CHECK(got.find("{\"cams\":[]}") != std::string::npos);
+        printf("may_send: held while it said no, sent once it said yes\n");
+        close(fd);
+    }
     return check_result("test_web");
 }

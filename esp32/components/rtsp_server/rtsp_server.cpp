@@ -120,6 +120,10 @@ void rtsp_server::flush(rtsp_client &c)
 {
     while (c.out_len > 0)
     {
+        if (config.may_send != nullptr && !config.may_send(c.out_len))
+        {
+            return;  // later: poll() tries again
+        }
         ssize_t n = send(c.fd, c.out, c.out_len, MSG_NOSIGNAL);
         if (n <= 0)
         {
@@ -425,7 +429,8 @@ void rtsp_server::send_rtp(int stream, const uint8_t *packet, size_t size)
         }
         if (!c.tcp)
         {
-            if (sendto(udp_fd, packet, size, 0, reinterpret_cast<sockaddr *>(&c.udp_dest), sizeof(c.udp_dest)) ==
+            if ((config.may_send == nullptr || config.may_send(size)) &&
+                sendto(udp_fd, packet, size, 0, reinterpret_cast<sockaddr *>(&c.udp_dest), sizeof(c.udp_dest)) ==
                 (ssize_t)size)
             {
                 sent++;
