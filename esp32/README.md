@@ -107,17 +107,7 @@ Once a second the base station prints, per camera, frames and RSSI, frame rate, 
 
 The ESP32-POE has no PSRAM, so RAM decides how much it can serve. Three cameras fit with a receive ring of one FEC block per stream (enough on a radio that delivers in order; `test_rx` checks it), 8 receive slots, and telemetry packets of at most 512 bytes: 76 KB of RAM is left before Ethernet, and about 30 KB once Ethernet, RTSP (2 clients of 4 KB) and the web view (4 connections of 2 KB) are up. Video for clients sits in TCP's buffers, on the heap, while it waits to be acknowledged; run dry, and the radio loses frames for every camera. So the servers hold data back while sending it would leave less than "RAM kept free for receiving" (10 KB), and a viewer that falls behind loses frames, not the others.
 
-What it can serve, measured on the ESP32-POE with one camera (25 fps, about 2.1 Mbit/s) and the clients on WiFi, 20 s each:
-
-| clients at once | each got | lowest free RAM |
-|---|---|---|
-| 1 web viewer | 473 of 495 JPEGs whole; 11 of the rest cut by packets lost on air | 14.6 KB |
-| 3 web viewers | 92 % of JPEGs whole | 5.2 KB |
-| 2 RTSP clients | 451 of 500 frames, 2 % of packets dropped | 5.8 KB |
-| 1 web viewer + 1 RTSP client | 450 JPEGs whole; 448 RTSP frames | 4.3 KB |
-| 3 web viewers + 1 RTSP client | overloaded: RTSP 121 frames, the radio loses frames | 3.0 KB |
-
-So about three video connections at once, in any mix; a browser showing three cameras uses three. With three cameras, receiving takes three times the CPU, which isn't measured yet. A browser's JPEG with a packet lost on air arrives cut off where the packet went missing, and the next one is whole.
+So it serves about three video connections at once, web viewers and RTSP clients in any mix; a browser showing three cameras uses three. More than that and the frames get cut short or skipped for everyone. A browser's JPEG with a packet lost on air arrives cut off where the packet went missing, and the next one is whole.
 
 "Ethernet" can be turned off in menuconfig, to run the firmware on an ESP32-CAM as a stand-in receiver (no RTSP and no web view).
 
