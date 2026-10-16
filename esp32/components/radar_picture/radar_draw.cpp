@@ -74,12 +74,20 @@ struct canvas
 
     void rect(int x0, int y0, int x1, int y1, ycc c)
     {
+        x0 = x0 < 0 ? 0 : x0;
+        y0 = y0 < 0 ? 0 : y0;
+        x1 = x1 > W ? W : x1;
+        y1 = y1 > H ? H : y1;
+        if (x0 >= x1 || y0 >= y1)
+        {
+            return;
+        }
         for (int yy = y0; yy < y1; yy++)
         {
-            for (int x = x0; x < x1; x++)
-            {
-                dot(x, yy, c);
-            }
+            memset(p.y + yy * W + x0, c.y, x1 - x0);
+            // chroma for every pair of pixels the rectangle touches
+            memset(p.cb + yy * (W / 2) + x0 / 2, c.cb, (x1 + 1) / 2 - x0 / 2);
+            memset(p.cr + yy * (W / 2) + x0 / 2, c.cr, (x1 + 1) / 2 - x0 / 2);
         }
     }
 

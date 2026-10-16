@@ -116,6 +116,26 @@ void encode_block(bit_writer &w, const uint8_t *plane, int stride, int x0, int y
                   const huffman &dc, const huffman &ac, int *pred)
 {
     float in[8][8], tmp[8][8];
+    int q[64];
+    // Most of a drawn picture is flat: a block of one value has only its DC coefficient (8 x the value)
+    const uint8_t first = plane[y0 * stride + x0];
+    bool flat = true;
+    for (int yy = 0; yy < 8 && flat; yy++)
+    {
+        const uint8_t *row = plane + (y0 + yy) * stride + x0;
+        for (int x = 0; x < 8; x++)
+        {
+            flat = flat && row[x] == first;
+        }
+    }
+    if (flat)
+    {
+        memset(q, 0, sizeof(q));
+        float dc = 8.0f * (first - 128.0f) / divisors[0];
+        q[0] = (int)(dc < 0 ? dc - 0.5f : dc + 0.5f);
+    }
+    else
+    {
     for (int yy = 0; yy < 8; yy++)
     {
         for (int x = 0; x < 8; x++)
@@ -135,7 +155,6 @@ void encode_block(bit_writer &w, const uint8_t *plane, int stride, int x0, int y
             tmp[yy][u] = s;
         }
     }
-    int q[64];
     for (int u = 0; u < 8; u++)   // columns, then quantization
     {
         for (int v = 0; v < 8; v++)
@@ -145,8 +164,10 @@ void encode_block(bit_writer &w, const uint8_t *plane, int stride, int x0, int y
             {
                 s += dct_table[v][yy] * tmp[yy][u];
             }
-            q[v * 8 + u] = (int)lroundf(s / divisors[v * 8 + u]);
+            s /= divisors[v * 8 + u];
+            q[v * 8 + u] = (int)(s < 0 ? s - 0.5f : s + 0.5f);
         }
+    }
     }
 
     // DC: the difference from the previous block, as its size category and then its bits
