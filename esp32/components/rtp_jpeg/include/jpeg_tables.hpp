@@ -1,4 +1,5 @@
-// The JPEG standard's Huffman tables (Annex K.3); see jpeg_tables.cpp.
+// The JPEG standard's Huffman tables (Annex K.3), as DHT segment bodies: class and id, 16 code counts, the
+// symbols. Shared by rtp_jpeg's headers and radar_picture's encoder; see jpeg_tables.cpp.
 #pragma once
 #include <stdint.h>
 
