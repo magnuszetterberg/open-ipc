@@ -133,7 +133,7 @@ At the top there is only `./ipc`, which covers the everyday tasks. What it uses 
 
 | script | does |
 |---|---|
-| `ipc` | the front door: setup, flash, view, stream, receive, send, keys, test, log |
+| `ipc` | the front door: setup, flash, view, stream, receive, send, keys, test, wfb-ng, log |
 | `pc/tx.sh` / `pc/rx.sh` | one command per PC for the PC-to-PC link (link + sender/receiver) |
 | `pc/link.sh [tx\|rx]` | puts the adapter in monitor mode and runs `wfb_tx` / `wfb_rx` (needs sudo); `rx` also receives camera 0's telemetry (UDP 5610) and keeps the latest signal stats in `/tmp/open-ipc-rx.stats` |
 | `pc/wifi.sh` | which WiFi adapter sends or receives, and which keys: used by `link.sh` and `ipc` |
@@ -145,6 +145,10 @@ At the top there is only `./ipc`, which covers the everyday tasks. What it uses 
 | `pc/sniff.sh [iface]` | counts what an adapter hears in monitor mode, to check it can receive at all |
 | `pc/clock.html` | millisecond clock for latency photos |
 | `esp32/` | the firmware, its build and test scripts ([esp32/README.md](esp32/README.md)) |
+
+## Keeping up with wfb-ng
+
+wfb-ng is a git submodule pinned to one upstream commit, so every build uses known code and a change upstream can't break the link unnoticed. `./ipc wfb-ng` says whether upstream has moved on, and whether that touches the protocol or code the firmware is built from. `./ipc wfb-ng update` moves the pin, rebuilds, runs the compatibility checks (ours against the new `wfb_tx` and `wfb_rx`) and both firmware builds, goes back if anything fails, and offers to commit the new pin.
 
 ## License
 
