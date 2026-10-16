@@ -125,5 +125,30 @@ int main()
     CHECK(run(count, [](int) { return false; }, &stats, 0, other_key).empty());
     CHECK(stats.count_p_dec_err > 0 && stats.count_p_outgoing == 0);
 
+    // Telemetry's stream: FEC 1/2, so each message stands alone and survives losing either of its two
+    // frames. Lose the data frame of even messages and the FEC frame of odd ones: all arrive, in order.
+    {
+        payload_list telemetry_out;
+        wfb_rx rx(telemetry_out);
+        wfb_rx_config rx_config;
+        rx_config.channel_id = 0x10;
+        CHECK(rx.init(gs_key, 64, rx_config) == WFB_OK);
+        air link(rx, [](int f) { return (f / 2) % 2 == 0 ? f % 2 == 0 : f % 2 == 1; });
+        wfb_tx tx(link);
+        wfb_tx_config tx_config;
+        tx_config.fec_k = 1;
+        tx_config.fec_n = 2;
+        tx_config.channel_id = 0x10;
+        CHECK(tx.init(drone_key, sizeof(drone_key), tx_config) == WFB_OK);
+        std::vector<std::string> sent;
+        for (int i = 0; i < 20; i++)
+        {
+            sent.push_back("{\"cam\":0,\"seq\":" + std::to_string(i) + ",\"uptime_s\":" + std::to_string(i) + "}");
+            CHECK(tx.send((const uint8_t *)sent.back().data(), sent.back().size(), (uint64_t)i * 1000000) == WFB_OK);
+        }
+        CHECK(telemetry_out.payloads == sent);
+        CHECK(rx.stats.count_p_fec_recovered == 10 && rx.stats.count_p_lost == 0);
+    }
+
     return check_result("test_rx");
 }
