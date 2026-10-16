@@ -85,12 +85,13 @@ menu "wfb-ng link"
     endchoice
 
     config RADIO_TX_CONTROL
-        hex "Frame tx_control (rate) on the command path"
+        hex "Frame tx_control (rate) on the command path, instead of LINK_MCS"
         depends on RADIO_TX_COMMAND
         default 0x0
         help
-            0: the firmware's choice, its lowest rate (1 Mbit/s). Bit 15 fixes the rate, and the rate
-            index sits from bit 16 up. RADIO_RATE_SWEEP finds which index is which.
+            0: HT20 MCS LINK_MCS, i.e. bit 15 (a fixed rate) and rate index 14 + MCS from bit 16 (0-3 are
+            1-11 Mbit/s, then 6-54 Mbit/s, 14-21 are MCS 0-7: measured with RADIO_RATE_SWEEP and the
+            base station's received-rate report). Without a fixed rate the firmware sends at 1 Mbit/s.
 
     config RADIO_RATE_SWEEP
         bool "Step through the rate indexes (to find HT MCS 3)"

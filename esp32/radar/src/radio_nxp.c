@@ -37,7 +37,8 @@
 #define HOST_FRAME_MAX 1400
 #endif
 
-uint32_t radio_nxp_tx_control = CONFIG_RADIO_TX_CONTROL;
+// Set in radio_nxp_start(): CONFIG_RADIO_TX_CONTROL, or HT20 MCS from the configured MCS
+uint32_t radio_nxp_tx_control;
 
 #if CONFIG_RADIO_TX_COMMAND
 // Adapted from wifi_mgmtframe_tx_cfg() in hal_nxp's mcux/middleware/wifi_nxp/wifidriver/mlan_api.c
@@ -104,8 +105,13 @@ int radio_nxp_start(uint8_t channel, uint8_t mcs)
         return -EIO;
     }
 
-    // A fixed rate, as wfb_tx sets in its radiotap header. Whether the firmware applies it to frames from
-    // the host is part of what M8 measures.
+#if CONFIG_RADIO_TX_COMMAND
+    // The rate goes in each frame's tx_control: bit 15 fixes it, and rate index 14 + n is HT MCS n (indexes
+    // measured on air, see Kconfig). wlan_set_txratecfg() below doesn't reach frames from the host.
+    radio_nxp_tx_control = CONFIG_RADIO_TX_CONTROL ? CONFIG_RADIO_TX_CONTROL : (1u << 15) | ((14u + mcs) << 16);
+#endif
+
+    // A fixed rate for the data path, as wfb_tx sets in its radiotap header
     wlan_ds_rate rate;
     memset(&rate, 0, sizeof(rate));
     rate.sub_command = WIFI_DS_RATE_CFG;
