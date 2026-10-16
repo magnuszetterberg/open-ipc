@@ -30,6 +30,7 @@ main { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 3
 // One tile per camera from /status.json, once a second. A camera's MJPEG is only opened while it is heard:
 // the base station has few connections to give, and a stream from a silent camera would only hang.
 const tiles = [];
+const BLANK = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
 const two = n => String(n).padStart(2, '0');
 const uptime = s => `${two(Math.floor(s / 3600))}:${two(Math.floor(s / 60) % 60)}:${two(s % 60)}`;
 
@@ -39,8 +40,11 @@ function tile(i) {
   el.innerHTML = `<div class="video"><p></p><img alt="" hidden></div><div class="text"><b>Camera ${i}</b>\n<span></span></div>`;
   document.getElementById('tiles').append(el);
   const t = { el, img: el.querySelector('img'), msg: el.querySelector('p'), text: el.querySelector('.text span'),
-              playing: false, retry_at: 0 };
+              playing: false, retry_at: 0, started: 0 };
   t.img.onerror = () => {  // refused (too many viewers) or dropped: try again in a while
+    if (!t.playing) {
+      return;  // the blank image of stop()
+    }
     stop(t, 'video unavailable (too many viewers?), retrying…');
     t.retry_at = Date.now() + 5000;
   };
@@ -48,7 +52,9 @@ function tile(i) {
 }
 
 function stop(t, why) {
-  t.img.removeAttribute('src');  // closes the connection
+  // A new source ends the stream's connection; Firefox keeps an MJPEG running when src is only removed,
+  // and the base station has few connections to give
+  t.img.src = BLANK;
   t.img.hidden = true;
   t.msg.textContent = why;
   t.playing = false;
@@ -56,8 +62,14 @@ function stop(t, why) {
 
 function show(i, cam) {
   const t = tiles[i] || (tiles[i] = tile(i));
+  // Playing, but the base station doesn't count this viewer: the connection died without the browser
+  // noticing (the base station restarted, or the network dropped it), and the picture would stay frozen
+  if (t.playing && cam.viewers === 0 && Date.now() - t.started > 5000) {
+    stop(t, 'reconnecting…');
+  }
   if (cam.video && !t.playing && Date.now() >= t.retry_at) {
     t.img.src = `/cam${i}.mjpg?${Date.now()}`;
+    t.started = Date.now();
     t.img.hidden = false;
     t.playing = true;
   } else if (!cam.video && t.playing) {
@@ -80,12 +92,17 @@ function show(i, cam) {
   t.text.textContent = s;  // telemetry is shown as text, never as markup
 }
 
+let last_uptime = 0;
 async function poll() {
   try {
     const r = await fetch(`/status.json?${Date.now()}`, { cache: 'no-store' });
     const s = await r.json();
+    if (s.uptime_s < last_uptime) {  // the base station restarted: every stream's connection is gone
+      tiles.forEach(t => t && t.playing && stop(t, 'reconnecting…'));
+    }
+    last_uptime = s.uptime_s;
     s.cams.forEach((cam, i) => show(i, cam));
-    document.getElementById('state').textContent = `up ${uptime(s.uptime_s)}`;
+    document.getElementById('state').textContent = `up ${uptime(s.uptime_s)}, started after ${s.reset}`;
   } catch (e) {
     document.getElementById('state').textContent = 'base station not answering';
   }

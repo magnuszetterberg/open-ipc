@@ -14,7 +14,7 @@
 struct web_config
 {
     uint16_t port = 80;
-    int max_clients = 4;          // MJPEG viewers, page and status requests together
+    int max_clients = 4;          // MJPEG viewers, page and status requests together; viewers get all but one
     size_t client_buffer = 4096;  // per client: response headers, the status document, MJPEG waiting for TCP
     // Asked before data is handed to TCP, whose buffers come from the heap: false keeps it waiting here. The
     // base station says no while RAM runs low, so viewers can't starve its radio. Null: always yes.
@@ -53,7 +53,7 @@ public:
     uint32_t jpegs_sent = 0;  // JPEGs that reached a viewer whole
     uint32_t jpegs_cut = 0;   // JPEGs a viewer got only part of: cut off on the way, or the viewer too slow
     uint32_t jpegs_skipped = 0;  // JPEGs a viewer didn't get at all: still behind with the ones before
-    uint32_t refused = 0;     // connections turned away: every client slot in use
+    uint32_t refused = 0;     // connections turned away: every client slot in use, or all but one for video
 
 private:
     void handle_request(web_client &c);

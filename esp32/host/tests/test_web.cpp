@@ -310,8 +310,8 @@ int main()
         server.poll(5);
     }
 
-    // A viewer that stops reading: its JPEGs are cut off, another viewer still gets every one whole; and a
-    // client over the limit (3) is turned away
+    // A viewer that stops reading: its JPEGs are cut off, another viewer still gets every one whole; and with
+    // all but one of the 3 connections playing, a third viewer is turned away and the page still answers
     {
         camera cam(server, jpeg);
         int stuck = socket(AF_INET, SOCK_STREAM, 0);
@@ -335,23 +335,35 @@ int main()
             read_some(good, &got);
         }
         CHECK(server.viewers(1) == 2);
-        int third = connect_to(port, "GET /cam0.mjpg HTTP/1.1\r\n\r\n");  // the last slot
-        int fourth = -1;
+        int third = connect_to(port, "GET /cam0.mjpg HTTP/1.1\r\n\r\n");  // the last connection: kept
         std::string turned_away;
         for (uint64_t end = now_us() + 300000; now_us() < end;)
         {
             server.poll(5);
-            if (fourth < 0 && server.viewers(0) == 1)
+            read_some(third, &turned_away);
+        }
+        CHECK(server.refused == 1 && server.viewers(0) == 0 &&
+              turned_away.find("503 Service Unavailable") != std::string::npos);
+        close(third);
+        CHECK(fetch(server, port, "GET /status.json HTTP/1.1\r\n\r\n").find("{\"cams\":[]}") != std::string::npos);
+        // A connection that never asks takes the kept one; the next is turned away as soon as it connects
+        int idle = connect_to(port, "");
+        int fourth = -1;
+        std::string busy;
+        for (uint64_t end = now_us() + 300000; now_us() < end;)
+        {
+            server.poll(5);
+            if (fourth < 0 && now_us() > end - 200000)
             {
                 fourth = connect_to(port, "GET / HTTP/1.1\r\n\r\n");
             }
             if (fourth >= 0)
             {
-                read_some(fourth, &turned_away);
+                read_some(fourth, &busy);
             }
         }
-        CHECK(server.refused == 1 && turned_away.find("503 Service Unavailable") != std::string::npos);
-        close(third);
+        CHECK(server.refused == 2 && busy.find("503 Service Unavailable") != std::string::npos);
+        close(idle);
         close(fourth);
         std::vector<std::string> parts = parts_of(got);
         int n_whole = 0;

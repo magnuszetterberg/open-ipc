@@ -85,11 +85,12 @@ menu "Ethernet out"
     config BASE_WEB_CLIENTS
         int "Web connections at once"
         depends on BASE_WEB
-        range 1 8
+        range 2 8
         default 4
         help
             Each camera playing in a browser takes one, and the page's status requests one briefly: a page
-            with three cameras needs four. A connection over the limit gets "503 too many viewers".
+            with three cameras needs four. Video gets all but one, so the page can always ask for its
+            status. A connection over the limit gets "503 too many viewers".
 
     config BASE_WEB_CLIENT_BUFFER
         int "Web buffer per connection (bytes)"

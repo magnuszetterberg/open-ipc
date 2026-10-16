@@ -12,6 +12,7 @@
 #include "driver/uart_vfs.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -194,13 +195,31 @@ static bool may_send(size_t size)
 }
 #endif
 
+// Why the base station last started, for the log and /status.json: a crash shows without a serial console
+static const char *reset_name(esp_reset_reason_t r)
+{
+    switch (r)
+    {
+    case ESP_RST_POWERON: return "power on";
+    case ESP_RST_SW: return "restart";
+    case ESP_RST_PANIC: return "crash";
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT: return "watchdog";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_EXT: return "reset pin";
+    default: return "other";
+    }
+}
+
 // /status.json for the web view: per camera, whether its video is heard and its latest telemetry (with the
 // signal quality added, as sent over UDP), or null when none came for 3 s.
 static void update_status(const uint32_t *video_frames)
 {
     static char json[web_server::status_max];
     uint64_t now = esp_timer_get_time();
-    int n = snprintf(json, sizeof(json), "{\"uptime_s\":%llu,\"cams\":[", (unsigned long long)(now / 1000000));
+    int n = snprintf(json, sizeof(json), "{\"uptime_s\":%llu,\"reset\":\"%s\",\"cams\":[",
+                     (unsigned long long)(now / 1000000), reset_name(esp_reset_reason()));
     for (int i = 0; i < CONFIG_BASE_CAMERAS && n > 0 && n < (int)sizeof(json); i++)
     {
         const telemetry_sink &t = cameras[i].telemetry_out;
@@ -333,6 +352,7 @@ extern "C" void app_main(void)
     // (115200 baud), long enough for the receive slots to fill and frames to be dropped.
     ESP_ERROR_CHECK(uart_driver_install((uart_port_t)CONFIG_ESP_CONSOLE_UART_NUM, 256, 2048, 0, nullptr, 0));
     uart_vfs_dev_use_driver(CONFIG_ESP_CONSOLE_UART_NUM);
+    ESP_LOGI(TAG, "started after: %s", reset_name(esp_reset_reason()));
     radio_config radio_cfg;
     radio_cfg.channel = CONFIG_LINK_CHANNEL;
     ESP_ERROR_CHECK(radio_start(radio_cfg));

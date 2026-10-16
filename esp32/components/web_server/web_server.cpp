@@ -226,6 +226,20 @@ void web_server::handle_request(web_client &c)
         size_t n = strlen(names[i]);
         if (path[0] == '/' && strncmp(path + 1, names[i], n) == 0 && strcmp(path + 1 + n, ".mjpg") == 0)
         {
+            // The last connection is kept for the page and its status requests: with every one taken by
+            // video, the page could no longer tell what it shows (and a browser's forgotten streams stay)
+            int playing = 0;
+            for (int k = 0; k < config.max_clients; k++)
+            {
+                playing += clients[k].fd >= 0 && clients[k].stream >= 0;
+            }
+            if (playing >= config.max_clients - 1)
+            {
+                static const char text[] = "too many viewers\n";
+                respond(c, "503 Service Unavailable", "text/plain", text, sizeof(text) - 1, true);
+                refused++;
+                return;
+            }
             static const char head[] = "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=frame\r\n"
                                        "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
             append(c, head, sizeof(head) - 1);
