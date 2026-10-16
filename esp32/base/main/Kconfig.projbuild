@@ -37,6 +37,15 @@ menu "wfb-ng link"
             ESP32 without PSRAM (#20). A camera sends each JPEG as a burst of about 12 packets, which
             8 slots didn't always hold.
 
+    config LINK_RX_SMALL_SLOTS
+        int "Received small frames that can wait to be processed"
+        range 0 64
+        default 24
+        help
+            Slots of 256 bytes for small frames: the empty packets a camera pads its last FEC block with
+            after each JPEG (7 of its ~24 frames), and telemetry. Each costs about 270 bytes, so they hold a
+            camera's burst for far less RAM than the large slots would.
+
 endmenu
 
 menu "Ethernet out"

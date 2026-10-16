@@ -8,13 +8,12 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "driver/uart.h"
-#include "driver/uart_vfs.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/ringbuf.h"
 #include "freertos/task.h"
 #include "eth.hpp"
 #include "keys.hpp"
@@ -195,6 +194,40 @@ static bool may_send(size_t size)
 }
 #endif
 
+// The console without waiting: a log line goes into a ring buffer, and a task of the lowest priority writes
+// it to the UART whenever nothing else needs core 1. ESP_LOG itself waits for the UART (115200 baud), and the
+// stats lines held the receive task for 37 ms each second: the receive slots filled and frames were dropped.
+// Other tasks wait for room (as they waited for the UART before), so lines at boot aren't lost.
+static RingbufHandle_t log_ring = nullptr;
+static TaskHandle_t receive_handle = nullptr;
+
+static int log_to_ring(const char *format, va_list args)
+{
+    char line[320];
+    int n = vsnprintf(line, sizeof(line), format, args);
+    if (n > 0)
+    {
+        TickType_t wait = xTaskGetCurrentTaskHandle() == receive_handle ? 0 : pdMS_TO_TICKS(500);
+        xRingbufferSend(log_ring, line, n < (int)sizeof(line) ? (size_t)n : sizeof(line) - 1, wait);
+    }
+    return n;
+}
+
+static void log_task(void *arg)
+{
+    for (;;)
+    {
+        size_t size = 0;
+        char *line = (char *)xRingbufferReceive(log_ring, &size, portMAX_DELAY);
+        if (line != nullptr)
+        {
+            fwrite(line, 1, size, stdout);
+            fflush(stdout);
+            vRingbufferReturnItem(log_ring, line);
+        }
+    }
+}
+
 // Why the base station last started, for the log and /status.json: a crash shows without a serial console
 static const char *reset_name(esp_reset_reason_t r)
 {
@@ -347,17 +380,17 @@ static void receive_task(void *arg)
 
 extern "C" void app_main(void)
 {
-    // The console through the UART driver: a log line goes into its buffer and out in the background.
-    // Without it, the stats lines kept the receive task waiting for the UART for 39 ms each second
-    // (115200 baud), long enough for the receive slots to fill and frames to be dropped.
-    ESP_ERROR_CHECK(uart_driver_install((uart_port_t)CONFIG_ESP_CONSOLE_UART_NUM, 256, 2048, 0, nullptr, 0));
-    uart_vfs_dev_use_driver(CONFIG_ESP_CONSOLE_UART_NUM);
+    log_ring = xRingbufferCreate(2048, RINGBUF_TYPE_NOSPLIT);  // a second's stats lines
+    if (log_ring != nullptr && xTaskCreatePinnedToCore(log_task, "log", 3072, nullptr, 1, nullptr, 1) == pdPASS)
+    {
+        esp_log_set_vprintf(log_to_ring);
+    }
     ESP_LOGI(TAG, "started after: %s", reset_name(esp_reset_reason()));
     radio_config radio_cfg;
     radio_cfg.channel = CONFIG_LINK_CHANNEL;
     ESP_ERROR_CHECK(radio_start(radio_cfg));
     static radio_rx radio;
-    ESP_ERROR_CHECK(radio.start(CONFIG_LINK_RX_SLOTS));
+    ESP_ERROR_CHECK(radio.start(CONFIG_LINK_RX_SLOTS, CONFIG_LINK_RX_SMALL_SLOTS));
     if (!init_cameras())
     {
         return;
@@ -414,5 +447,5 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "%d cameras on link 0x%06x; RAM free %u (largest block %u)", CONFIG_BASE_CAMERAS, CONFIG_LINK_ID,
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-    xTaskCreatePinnedToCore(receive_task, "receive", 6144, &radio, 5, nullptr, 1);  // core 1 (Coding conventions)
+    xTaskCreatePinnedToCore(receive_task, "receive", 6144, &radio, 5, &receive_handle, 1);  // core 1 (Coding conventions)
 }

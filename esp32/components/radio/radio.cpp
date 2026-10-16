@@ -67,25 +67,39 @@ void radio_tx::send_frame(const uint8_t *buf, size_t size)
 
 static radio_rx *receiver = nullptr;  // the driver's callback has no context argument
 
-esp_err_t radio_rx::start(int slots)
+// One slot: the frame's fields, then its data
+static radio_frame *new_slot(size_t capacity)
+{
+    // Internal RAM, so the driver's callback doesn't wait on PSRAM; and byte-addressable: on the
+    // ESP32, MALLOC_CAP_INTERNAL alone may hand out instruction RAM, where byte writes fault.
+    radio_frame *f = static_cast<radio_frame *>(
+        heap_caps_malloc(sizeof(radio_frame) + capacity, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    if (f != nullptr)
+    {
+        f->capacity = (uint16_t)capacity;
+        f->data = reinterpret_cast<uint8_t *>(f + 1);
+    }
+    return f;
+}
+
+esp_err_t radio_rx::start(int slots, int small_slots, size_t small)
 {
     free_slots = xQueueCreate(slots, sizeof(radio_frame *));
-    full_slots = xQueueCreate(slots, sizeof(radio_frame *));
-    if (free_slots == nullptr || full_slots == nullptr)
+    free_small = small_slots > 0 ? xQueueCreate(small_slots, sizeof(radio_frame *)) : nullptr;
+    full_slots = xQueueCreate(slots + small_slots, sizeof(radio_frame *));
+    if (free_slots == nullptr || full_slots == nullptr || (small_slots > 0 && free_small == nullptr))
     {
         return ESP_ERR_NO_MEM;
     }
-    for (int i = 0; i < slots; i++)
+    small_size = small_slots > 0 ? small : 0;
+    for (int i = 0; i < slots + small_slots; i++)
     {
-        // Internal RAM, so the driver's callback doesn't wait on PSRAM; and byte-addressable: on the
-        // ESP32, MALLOC_CAP_INTERNAL alone may hand out instruction RAM, where byte writes fault.
-        radio_frame *f = static_cast<radio_frame *>(
-            heap_caps_malloc(sizeof(radio_frame), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+        radio_frame *f = new_slot(i < slots ? RADIO_FRAME_MAX : small_size);
         if (f == nullptr)
         {
             return ESP_ERR_NO_MEM;
         }
-        xQueueSend(free_slots, &f, 0);
+        xQueueSend(i < slots ? free_slots : free_small, &f, 0);
     }
     receiver = this;
 
@@ -94,7 +108,8 @@ esp_err_t radio_rx::start(int slots)
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_filter(&filter));
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(&radio_rx::callback));
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
-    ESP_LOGI(TAG, "receiving wfb-ng frames, %d slots of %u bytes", slots, (unsigned)sizeof(radio_frame));
+    ESP_LOGI(TAG, "receiving wfb-ng frames, %d slots of %u bytes and %d of %u", slots, (unsigned)RADIO_FRAME_MAX,
+             small_slots, (unsigned)small_size);
     return ESP_OK;
 }
 
@@ -134,12 +149,13 @@ void radio_rx::callback(void *buf, wifi_promiscuous_pkt_type_t type)
     size_t packet_size;
     // sig_len includes the 4-byte FCS (esp_wifi_types_native.h); rx.cpp drops it the same way
     if (!wfb_80211_unframe(pkt->payload, pkt->rx_ctrl.sig_len - 4, &channel_id, &packet, &packet_size) ||
-        packet_size > sizeof(radio_frame::data))
+        packet_size > RADIO_FRAME_MAX)
     {
         return;
     }
     radio_frame *f;
-    if (xQueueReceive(self->free_slots, &f, 0) != pdTRUE)
+    bool small = packet_size <= self->small_size && xQueueReceive(self->free_small, &f, 0) == pdTRUE;
+    if (!small && xQueueReceive(self->free_slots, &f, 0) != pdTRUE)
     {
         self->overflow = self->overflow + 1;
         return;
@@ -161,5 +177,5 @@ radio_frame *radio_rx::receive(TickType_t timeout)
 
 void radio_rx::release(radio_frame *frame)
 {
-    xQueueSend(free_slots, &frame, 0);
+    xQueueSend(frame->capacity == RADIO_FRAME_MAX ? free_slots : free_small, &frame, 0);
 }
