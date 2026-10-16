@@ -1,6 +1,6 @@
 # ESP32 wfb-ng link: design
 
-Status: M0–M7 done. Updated 2026-10-16: M8, a radar picture sent like a camera.
+Status: M0–M7 done. Updated 2026-10-16: M8 and M9, NXP's FRDM-RW612 as a radar camera.
 
 We are building ESP32 firmware that speaks the wfb-ng protocol. ESP32-CAMs send video and telemetry to the receiver that already works (the NUC with the Ralink stick), and later to an ESP32 with Ethernet that serves each camera on the LAN. A PC burns the telemetry into the video and pushes it to the RTMP video server.
 
@@ -13,7 +13,7 @@ We are building ESP32 firmware that speaks the wfb-ng protocol. ESP32-CAMs send 
 5. **Telemetry.** Each camera sends telemetry next to its video, on its own radio port: uptime, frame rate and frame size to start with, and temperature where the board has a sensor it can read. The ESP32-CAM's classic ESP32 has none, so it sends `null`. Signal quality is added where the link is received. The format may later mimic DJI's video-system telemetry field for field, once there is a sample to match.
 6. **To the video server.** A Linux script burns the telemetry into each camera's video, encodes it as H.264 and pushes it to the RTMP video server.
 7. **Web view.** The base station serves a simple web page that shows each camera's live video and telemetry, in any browser on the LAN, with nothing installed.
-8. **Radar picture.** A UWB radar (NXP's Trimension SR250) watches a space instead of a camera. Its measurements are drawn as a picture and sent like a camera's video, so everything that shows a camera (the base station, its web view, RTSP, the burn-in script, `./ipc receive`) shows the radar too, unchanged. It sees movement and presence in the dark, and shows no faces.
+8. **Radar camera.** An NXP FRDM-RW612 board with the Trimension SR250 UWB radar shield watches a space instead of a camera. It draws the radar's measurements as a picture and sends it over wfb-ng itself, as camera N, so everything that shows a camera (the base station, its web view, RTSP, the burn-in script, `./ipc receive`) shows the radar too, unchanged. It sees movement and presence in the dark, and shows no faces.
 
 **Not goals**
 
@@ -23,8 +23,8 @@ We are building ESP32 firmware that speaks the wfb-ng protocol. ESP32-CAMs send 
 - A return link (ground to camera: commands, `wfb_tun`, MAVLink). Everything flows from camera to ground.
 - Changes to the wfb-ng protocol. We stay compatible with upstream; we don't fork it.
 - Replacing the Linux scripts. `tx.sh`, `rx.sh` and `link.sh` stay as they are.
-- UWB as a radio link, or UWB ranging between devices. The SR250 is used as a radar only; the video still goes over wfb-ng.
-- NXP's UWB software in this repo. It is under NXP's proprietary licence, which doesn't mix with GPLv3: the user gets it from NXP, and our code talks to it over a cable.
+- UWB as a radio link, or UWB ranging between devices. The SR250 is used as a radar only; the picture goes over wfb-ng.
+- NXP's UWB software, in the firmware or in the repo. It is under NXP's proprietary licence, which doesn't mix with GPLv3; the firmware talks UCI to the SR250 itself.
 
 ## System overview
 
@@ -45,11 +45,11 @@ ESP32-CAM 3 (ports 2, 0x12) ─┘          RTSP per camera (RTP/JPEG, untouched
 LAN ─► PC: burn telemetry into the video, encode H.264 ─► RTMP ─► video server
 ```
 
-The radar (M8) is one more camera on the same link. A PC draws the picture and sends it with `wfb_tx`, as `./ipc send` does:
+The radar camera (M8–M9) is a third firmware, on NXP's RW612 instead of an ESP32. It reads the SR250 over SPI and sends the way an ESP32-CAM does:
 
 ```
-SR250 shield ─SPI─► FRDM-RW612 (NXP's plug-and-play firmware) ─USB, UCI─► PC: radar CIRs ─► picture ─► RTP/JPEG
-                                                                           ─► wfb_tx as camera N ─► base station or ./ipc receive
+SR250 shield ─SPI, UCI─► RW612: radar CIRs ─► picture ─► JPEG ─► RTP/JPEG ─► wfb core ─► radio (wifi_inject_frame)
+                         presence, distance (telemetry) ─────────────────► wfb core, its own stream ─► radio
 ```
 
 Inside the camera firmware, each stage is a task, and stages are connected by queues of fixed-size buffers:
@@ -63,11 +63,13 @@ telemetry (once a second)   ─► wfb core, its own stream ──────�
 |---|---|---|---|
 | `wfb_core` | core | ESP32 and Linux | session key, packet format, FEC, encryption; send and receive |
 | `rtp_jpeg` | core | ESP32 and Linux | splits a JPEG into RFC 2435 RTP packets, and back |
-| `radio` | platform | ESP32 | raw send with `esp_wifi_80211_tx()`, receive in promiscuous mode |
+| `radio` | platform | ESP32, RW612 | raw send with `esp_wifi_80211_tx()`, receive in promiscuous mode; on the RW612, `wifi_inject_frame()` from NXP's WiFi driver |
+| `radar_picture` | core | RW612 and Linux | radar CIRs to a picture, and the picture to a JPEG that `rtp_jpeg` sends (M9) |
+| `uwb` | platform | RW612 | the SR250 over SPI: our own UCI client (M9) |
 | `camera` app | app | ESP32-CAM | camera → packetizer → core → radio; telemetry → core → radio |
 | `base` app | app | ESP32 + Ethernet | radio → core → RTSP, telemetry and the web view on Ethernet |
+| `radar` app | app | FRDM-RW612 + SR250 | radar → picture → JPEG → packetizer → core → radio; presence and distance as telemetry (M8–M9) |
 | burn-in script | — | Linux PC | video + telemetry in; overlay, H.264, RTMP out |
-| radar script | — | Linux PC | SR250 over UCI in; picture as RTP/JPEG out, sent as camera N (M8) |
 
 ## Architecture rules
 
@@ -79,9 +81,9 @@ The protocol is the contract. Each rule is numbered so code reviews and commits 
 4. **R4 Three layers, dependencies point down only.**
     - *app*: one per firmware. It wires the parts together and holds the config.
     - *core*: protocol, encryption, FEC, RTP/JPEG. Plain C/C++, no ESP-IDF headers, so it also builds and runs on Linux.
-    - *platform*: radio, camera, Ethernet, clock. The only place ESP-IDF calls appear.
+    - *platform*: radio, camera, Ethernet, clock, UWB. The only place ESP-IDF calls appear, or on the RW612, Zephyr and NXP driver calls.
 5. **R5 The core never calls the hardware.** It hands finished frames to an interface (the role `inject_packet()` has in `tx.cpp`) and receives frames the same way. The platform layer implements that interface with `esp_wifi_80211_tx()` on the ESP32 and with a socket or a file in host tests.
-6. **R6 Two firmwares, shared components.** The camera and the base station are separate ESP-IDF projects that share the core and platform components. Their differences live in the app layer, not in `#ifdef`s.
+6. **R6 Separate firmwares, shared components.** The camera and the base station are separate ESP-IDF projects that share the core and platform components. The radar camera is a Zephyr project for the RW612 that shares the core. Their differences live in the app layer, not in `#ifdef`s.
 7. **R7 Standard payloads.** Video inside the link is RTP/JPEG (RFC 2435), so GStreamer and ffmpeg on Linux play it with no custom code.
 8. **R8 Config is fixed at build time to start with.** Channel, rate, FEC, link and port IDs, and keys are set through Kconfig (`idf.py menuconfig`). Changing them at runtime comes later, if a milestone needs it.
 9. **R9 Only the test keys are committed.** Firmware embeds `keys/drone.key` (camera) or `keys/gs.key` (base station) at build time. Real keys stay out of git, as they do today.
@@ -105,7 +107,8 @@ The ESP32 uses the same settings `link.sh` uses today, so the first test needs n
 | Signal quality | Measured where the link is received: RSSI, loss and bitrate, added by the base station (or from `wfb_rx`'s stats on the NUC) | The camera can't know how well it is heard |
 | UDP port on the NUC | 5600, as now | `receiver.sh` gets a JPEG mode next to H.264 |
 | Base station out (M5) | RTSP per camera, `rtsp://<base>:8554/camN`, RTP/JPEG passed through; telemetry as UDP | RTSP is standard; the re-encoding to H.264 for RTMP happens on a PC |
-| Radar picture (M8) | Camera N's ports: the picture as RTP/JPEG (R7) on video port N, what the radar reports (presence, distance) as telemetry on 0x10 + N. 320×240 grey or false colour, about 10 pictures a second (*start*) | Nothing downstream needs to know it is a radar; a small picture costs a fraction of a camera's airtime |
+| RW612 radio (M8) | Channel 6, HT20 MCS 3, the same frames and FEC as the ESP32 | The base station is 2.4 GHz only, so the RW612's 5 GHz stays unused |
+| Radar picture (M9) | Camera N's ports: the picture as RTP/JPEG (R7) on video port N, presence and distance as telemetry on 0x10 + N. 320×240, about 10 pictures a second (*start*). Baseline JPEG, 4:2:2 with the standard Huffman tables, as the OV2640's | Nothing downstream needs to know it is a radar. RFC 2435 has no greyscale type, and this is the JPEG `rtp_jpeg` already sends |
 | Base station web view (M7) | `http://<base>/`: a tile per camera. `http://<base>/camN.mjpg`: its video as MJPEG (`multipart/x-mixed-replace`), JPEGs rebuilt from RTP/JPEG, not re-encoded. `http://<base>/status.json`: each camera's telemetry and signal quality | Browsers can't play RTSP, but show MJPEG in an `<img>`; the cameras' JPEGs pass through as sent |
 
 One camera at 640×480 and 10–15 fps sends an estimated 1.5–3.5 Mbit/s. Three cameras share one channel, so about 5–10 Mbit/s in total. These are estimates; M3 measures them.
@@ -159,12 +162,12 @@ esp32/
   camera/         ESP-IDF project: camera firmware
   base/           ESP-IDF project: base-station firmware
   host/           CMake build of the core for Linux, plus its tests
+  radar/          Zephyr project: radar camera firmware for the FRDM-RW612 (its app and RW612 platform code)
   build.sh        one command per firmware, like the top-level scripts
-pc/
-  radar/          the radar picture (M8): UCI client, CIRs to a picture, sent as camera N
 ```
 
 - ESP-IDF is pinned to one release, chosen in M0 and written in `esp32/README.md`.
+- The radar firmware is built with Zephyr (`west`), pinned to one release in M8. NXP's WiFi driver for the RW612 (BSD-3-Clause, with raw send and a monitor mode) and the board support live there.
 - Outside code comes from the ESP Component Manager (`esp32-camera`, `libsodium`, `lan87xx`), with versions pinned in each project's `idf_component.yml`.
 - The Linux side keeps using its scripts, in `pc/`; `./ipc` at the repo root is the front door that runs them. `receiver.sh` gets a JPEG mode (`rtpjpegdepay ! jpegdec`) next to H.264. The burn-in script is a new script there, built on ffmpeg like `sender.sh`.
 
@@ -176,7 +179,7 @@ pc/
 
 ## Milestones
 
-Each milestone ends with something that can be shown working. M6 doesn't depend on M4 and M5, so it can be done before them. M7 builds on M5. M8 needs only M2's receiving side (and M5 to show it on the base station).
+Each milestone ends with something that can be shown working. M6 doesn't depend on M4 and M5, so it can be done before them. M7 builds on M5. M8 needs only M1's receiver; M9 builds on M8 (and M5, to show it on the base station).
 
 1. **M0 Toolchain and skeleton.** ESP-IDF installed, `esp32/` laid out, the core building on Linux with zfex and libsodium. Done when the host tests pass.
 2. **M1 On-air compatibility.** Any ESP32 sends wfb-ng frames with a test payload (a counter). Done when the NUC's unmodified `wfb_rx` decodes them and the counter arrives on port 5600.
@@ -186,7 +189,8 @@ Each milestone ends with something that can be shown working. M6 doesn't depend 
 6. **M5 Three cameras to the video server.** The base station receives three cameras and serves each as RTSP, with its telemetry and signal quality as UDP. Done when all three play from another machine, and one reaches the RTMP video server through the burn-in script with its telemetry burned in.
 7. **M6 Telemetry and burn-in.** The camera sends its uptime once a second on its telemetry port (and temperature, where the board has a sensor). On the NUC, the telemetry is received next to the video, and the burn-in script draws it, with signal quality, onto the video, encodes H.264 and pushes RTMP (or records a file when no server is given). Done when the output shows the telemetry burned in, updating every second.
 8. **M7 Web view on the base station.** The base station serves a web page with a tile per camera: its live video as MJPEG over HTTP, and its telemetry and signal quality, refreshed once a second. Without PSRAM, three whole frames don't fit in RAM, so each frame goes to the browser as its packets arrive, and a frame with a lost packet is cut off and skipped. The number of viewers is capped. The web view needs Ethernet, so an ESP32-CAM standing in as the base station (Ethernet off) has none. Done when a browser on the LAN shows every connected camera's live video and telemetry from the base station's page.
-9. **M8 Radar picture.** The SR250 shield sits on an FRDM-RW612 running NXP's plug-and-play firmware, connected to a PC by USB. A script on the PC starts a radar session over UCI, receives the channel impulse responses (CIRs), and draws a picture from them, to start with distance over time: a scrolling picture in which a person moving shows up as a trace. It sends the picture as camera N, RTP/JPEG over `wfb_tx` with the camera keys, and the radar's presence and distance as camera N's telemetry. `./ipc radar` runs it. The drawing is tested on recorded CIRs, with no board. Done when a person walking towards and away from the sensor is seen as a moving trace, live, in `./ipc receive` on another PC or in the base station's web view.
+9. **M8 RW612 on air.** The FRDM-RW612 joins as a third firmware, built with Zephyr: the core builds for it, and its radio sends wfb-ng frames with `wifi_inject_frame()` on channel 6, with a test payload (a counter), as in M1. Done when the NUC's unmodified `wfb_rx` decodes them and the counter arrives on port 5600.
+10. **M9 Radar picture.** The SR250 shield sits on the FRDM-RW612, with SPI routed to its Arduino header. The firmware talks UCI to the SR250 itself, runs a radar session, and draws the channel impulse responses (CIRs) as a picture, to start with distance over time: a scrolling picture in which a moving person shows up as a trace. The picture is encoded as JPEG and sent as camera N, with presence and distance as camera N's telemetry. The drawing and the encoder are core code, tested on Linux with recorded CIRs. Done when a person walking towards and away from the sensor shows as a moving trace, live, in `./ipc receive` or in the base station's web view.
 
 ## Open questions and risks
 
@@ -207,8 +211,11 @@ Each milestone ends with something that can be shown working. M6 doesn't depend 
 | CPU on the base station: at 160 MHz with `-Og`, the ESP32-POE dropped received frames from one camera sending about 600 frames/s; 240 MHz with `-O2` dropped far fewer | M5 and M7: measure with three cameras |
 | DJI-style telemetry: which DJI system, and a sample to match field for field | when there is a sample |
 | The classic ESP32 has no supported temperature sensor | M6: `temp_c` is `null` on the ESP32-CAM; an external sensor later, if needed |
-| NXP's plug-and-play firmware and the SR250 firmware update come with Windows tools (`blhost.exe`, `Fwdnld_app_cli.exe`); does the setup work from Linux? | M8 (NXP's `blhost` from `spsdk` runs on Linux; the SR250 update maybe through the Zephyr `demo_sr2xx_fw_update`) |
-| The FRDM-RW612 doesn't route SPI to the Arduino headers: it needs a rework, or two jumper wires (D0–D11, D1–D12) | M8: the user's board |
-| What picture is most useful: distance over time, distance and speed, or a top-down view from the three receive antennas (3D angle of arrival)? | M8 starts with distance over time; the others after, if wanted |
-| Which UCI commands and fields the radar needs, without copying NXP's code | M8: our own client, from the UCI messages the plug-and-play firmware exchanges |
-| A radar without a PC: an ESP32 that takes the place of the PC, talking UCI to the FRDM-RW612 over a serial cable | after M8, as a milestone of its own |
+| Does the RW612's `wifi_inject_frame()` send wfb-ng's data frame unchanged (the MAC address bytes `wfb_rx` filters on), on a fixed channel and rate, without joining a network? NXP's driver says injected frames go out on the station interface | M8 |
+| Is the RW612 fast enough for encryption, FEC and injection at a few hundred kbit/s, next to the radar? | M8, then M9 |
+| The RW612's WiFi firmware is an NXP binary the driver loads into the WiFi core: fine next to GPLv3 firmware, as ESP-IDF's WiFi libraries are? | M8 (with #10's reasoning) |
+| The SR250 needs current firmware, and NXP's updater is a program of its own (Zephyr `demo_sr2xx_fw_update`, or a Windows tool) | M9: flashed once, before our firmware |
+| The FRDM-RW612 doesn't route SPI to the Arduino headers: it needs a rework, or two jumper wires (D0–D11, D1–D12) | M9: the user's board |
+| Which UCI commands and fields the radar needs, without copying NXP's code | M9: from the UCI messages on the wire |
+| Is a software JPEG encoder on the RW612 fast enough for 320×240 at 10 pictures a second? | M9 |
+| What picture is most useful: distance over time, distance and speed, or a top-down view from the shield's three receive antennas (3D angle of arrival)? | M9 starts with distance over time; the others after, if wanted |
