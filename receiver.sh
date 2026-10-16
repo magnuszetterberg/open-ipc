@@ -4,13 +4,31 @@
 #
 #   ./receiver.sh                 H.264 (sender.sh); GStreamer if all its plugins are installed, else ffplay
 #   VIDEO=jpeg ./receiver.sh      RTP/JPEG (RFC 2435), what the ESP32-CAM sends
+#   VIDEO=auto ./receiver.sh      whichever arrives: waits for the first packet and looks at its type
 #   PLAYER=ffplay ./receiver.sh
 set -euo pipefail
 cd "$(dirname "$0")"
 
 PORT=${PORT:-5600}
 PLAYER=${PLAYER:-auto}    # auto | gst | ffplay
-VIDEO=${VIDEO:-h264}      # h264 | jpeg
+VIDEO=${VIDEO:-h264}      # h264 | jpeg | auto
+
+# auto: RTP payload type 26 is JPEG (the ESP32-CAM), anything else H.264 (sender.sh uses 96).
+if [[ $VIDEO == auto ]]; then
+  echo "waiting for video on UDP $PORT..." >&2
+  VIDEO=$(python3 -c '
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("", int(sys.argv[1])))
+while True:
+    d = s.recv(2048)
+    if len(d) >= 12 and d[0] >> 6 == 2:  # RTP version 2
+        print("jpeg" if d[1] & 0x7f == 26 else "h264")
+        break
+' "$PORT")
+  echo "video: ${VIDEO^^}" >&2
+fi
 
 case $VIDEO in
   h264)
@@ -23,7 +41,7 @@ case $VIDEO in
     decode=(rtpjpegdepay ! jpegdec)
     elements=(rtpjpegdepay jpegdec)
     rtpmap="26 JPEG/90000" ;;
-  *) echo "unknown VIDEO: $VIDEO" >&2; exit 1 ;;
+  *) echo "unknown VIDEO: $VIDEO (h264, jpeg or auto)" >&2; exit 1 ;;
 esac
 
 if [[ $PLAYER == auto ]]; then
