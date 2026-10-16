@@ -59,7 +59,54 @@ menu "Ethernet out"
         range 1 6
         default 2
         help
-            Each costs an 8 KB buffer.
+            Each costs its buffer (below) and about 2 KB.
+
+    config BASE_RTSP_CLIENT_BUFFER
+        int "RTSP buffer per client (bytes)"
+        range 2048 16384
+        default 4096
+        help
+            Video waiting for a client's TCP connection, on top of lwIP's own send buffer. A client that falls
+            further behind loses whole RTP packets.
+
+    config BASE_WEB
+        bool "Web view"
+        default y
+        help
+            http://<base station>/: a tile per camera with its live video (MJPEG) and telemetry (M7).
+
+    config BASE_WEB_PORT
+        int "Web view port"
+        depends on BASE_WEB
+        range 1 65535
+        default 80
+
+    config BASE_WEB_CLIENTS
+        int "Web connections at once"
+        depends on BASE_WEB
+        range 1 8
+        default 4
+        help
+            Each camera playing in a browser takes one, and the page's status requests one briefly: a page
+            with three cameras needs four. A connection over the limit gets "503 too many viewers".
+
+    config BASE_WEB_CLIENT_BUFFER
+        int "Web buffer per connection (bytes)"
+        depends on BASE_WEB
+        range 1280 16384
+        default 2048
+        help
+            Video waiting for a viewer's TCP connection, on top of lwIP's own send buffer. A viewer that falls
+            further behind loses the rest of a frame, and gets the next one it has room for.
+
+    config BASE_RAM_RESERVE
+        int "RAM kept free for receiving (bytes)"
+        range 4096 32768
+        default 10240
+        help
+            Data for RTSP clients and web viewers is held back while sending it would leave less free RAM
+            than this. TCP's buffers come from the same RAM as the radio's and Ethernet's: run dry, and every
+            camera's video breaks up, not just the slow viewer's.
 
     config BASE_OUT_HOST
         string "Send camera 0's video and every camera's telemetry to (IPv4 address)"

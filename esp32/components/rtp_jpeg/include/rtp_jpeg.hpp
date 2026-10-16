@@ -63,6 +63,12 @@ private:
     uint8_t packet[1500];
 };
 
+// The headers of the JPEG file an RTP/JPEG frame stands for (RFC 2435 appendix A's MakeHeaders): SOI,
+// DQT with the frame's two tables, SOF0, DHT with the standard tables, SOS. The scan data and EOI follow.
+// qtables: luma then chroma, 64 bytes each. Returns the size written, 0 if cap is too small.
+static const size_t RTP_JPEG_HEADERS_MAX = 600;
+size_t jpeg_headers(uint8_t *out, size_t cap, uint8_t type, int width, int height, const uint8_t *qtables);
+
 // Puts RTP/JPEG packets back together into JPEG files. Used by the host tests, and by anything that
 // has to hand a receiver whole JPEGs.
 class rtp_jpeg_depacketizer
@@ -87,4 +93,39 @@ private:
     uint8_t type = 0;
     int width = 0, height = 0;
     uint8_t qtables[128] = {};
+};
+
+// Receives JPEG files a piece at a time, as rtp_jpeg_streamer rebuilds them.
+class jpeg_stream_sink
+{
+public:
+    virtual void jpeg_begin() = 0;
+    virtual void jpeg_data(const uint8_t *data, size_t size) = 0;
+    // complete: the JPEG ended with EOI. Otherwise a packet went missing and it stops where it was cut off.
+    virtual void jpeg_end(bool complete) = 0;
+
+protected:
+    ~jpeg_stream_sink() = default;
+};
+
+// Rebuilds JPEG files from RTP/JPEG packets as they arrive, without holding a frame (the base station has
+// no room for one per camera): the headers when a frame's first packet arrives, then each packet's scan
+// data, then EOI. A frame with a packet missing is cut off; the next frame starts afresh. For whole frames,
+// the bytes are the same as rtp_jpeg_depacketizer's.
+class rtp_jpeg_streamer
+{
+public:
+    explicit rtp_jpeg_streamer(jpeg_stream_sink &sink);
+
+    void push(const uint8_t *packet, size_t size);
+
+    uint32_t frames = 0;      // complete
+    uint32_t frames_cut = 0;  // started but cut off, or refused (no in-band tables)
+
+private:
+    jpeg_stream_sink &sink;
+    bool streaming = false;
+    uint32_t timestamp = 0;
+    size_t next_offset = 0;
+    uint8_t headers[RTP_JPEG_HEADERS_MAX];
 };

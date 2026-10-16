@@ -14,6 +14,10 @@ struct rtsp_config
     uint16_t port = 8554;
     int max_clients = 4;
     size_t client_buffer = 16384;  // per client: interleaved video waiting for its TCP connection
+    // Asked before data is handed to the network stack, whose buffers come from the heap: false keeps TCP
+    // data waiting here and drops a UDP packet. The base station says no while RAM runs low, so clients
+    // can't starve its radio. Null: always yes.
+    bool (*may_send)(size_t size) = nullptr;
 };
 
 struct rtsp_client;

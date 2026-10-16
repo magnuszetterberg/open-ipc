@@ -9,6 +9,7 @@ add_compile_options(-Wall "$<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions;-fno-rtti>"
 add_subdirectory(../components/wfb_core wfb_core)
 add_subdirectory(../components/rtp_jpeg rtp_jpeg)
 add_subdirectory(../components/rtsp_server rtsp_server)
+add_subdirectory(../components/web_server web_server)
 
 enable_testing()
 function(host_test name)
@@ -32,3 +33,6 @@ target_compile_definitions(test_rtp_jpeg PRIVATE DATA_DIR="${CMAKE_CURRENT_LIST_
 
 host_test(test_rtsp rtsp_server rtp_jpeg)
 target_compile_definitions(test_rtsp PRIVATE DATA_DIR="${CMAKE_CURRENT_LIST_DIR}/tests/data")
+
+host_test(test_web web_server rtp_jpeg)
+target_compile_definitions(test_web PRIVATE DATA_DIR="${CMAKE_CURRENT_LIST_DIR}/tests/data")

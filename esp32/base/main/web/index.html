@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Base station</title>
+<style>
+:root { --bg: #f4f4f2; --tile: #fff; --text: #1d1d1b; --dim: #6b6b66; --line: #ddddd8; --video: #202020; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #161615; --tile: #222220; --text: #ececea; --dim: #9a9a94; --line: #34342f; --video: #000; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 16px; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
+header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+h1 { font-size: 18px; margin: 0; }
+#state { color: var(--dim); }
+main { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 12px; }
+.tile { background: var(--tile); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.video { position: relative; aspect-ratio: 4 / 3; background: var(--video); }
+.video img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.video p { position: absolute; inset: 0; margin: 0; display: flex; align-items: center; justify-content: center; color: #aaa; }
+.text { padding: 8px 10px; font: 13px/1.5 ui-monospace, monospace; white-space: pre-wrap; }
+.text b { font: 600 14px system-ui, sans-serif; }
+</style>
+</head>
+<body>
+<header><h1>Base station</h1><span id="state">connecting…</span></header>
+<main id="tiles"></main>
+<script>
+// One tile per camera from /status.json, once a second. A camera's MJPEG is only opened while it is heard:
+// the base station has few connections to give, and a stream from a silent camera would only hang.
+const tiles = [];
+const two = n => String(n).padStart(2, '0');
+const uptime = s => `${two(Math.floor(s / 3600))}:${two(Math.floor(s / 60) % 60)}:${two(s % 60)}`;
+
+function tile(i) {
+  const el = document.createElement('section');
+  el.className = 'tile';
+  el.innerHTML = `<div class="video"><p></p><img alt="" hidden></div><div class="text"><b>Camera ${i}</b>\n<span></span></div>`;
+  document.getElementById('tiles').append(el);
+  const t = { el, img: el.querySelector('img'), msg: el.querySelector('p'), text: el.querySelector('.text span'),
+              playing: false, retry_at: 0 };
+  t.img.onerror = () => {  // refused (too many viewers) or dropped: try again in a while
+    stop(t, 'video unavailable (too many viewers?), retrying…');
+    t.retry_at = Date.now() + 5000;
+  };
+  return t;
+}
+
+function stop(t, why) {
+  t.img.removeAttribute('src');  // closes the connection
+  t.img.hidden = true;
+  t.msg.textContent = why;
+  t.playing = false;
+}
+
+function show(i, cam) {
+  const t = tiles[i] || (tiles[i] = tile(i));
+  if (cam.video && !t.playing && Date.now() >= t.retry_at) {
+    t.img.src = `/cam${i}.mjpg?${Date.now()}`;
+    t.img.hidden = false;
+    t.playing = true;
+  } else if (!cam.video && t.playing) {
+    stop(t, 'not heard');
+  } else if (!cam.video) {
+    t.msg.textContent = 'not heard';
+  }
+  const m = cam.telemetry;
+  let s = '';
+  if (m) {
+    const temp = m.temp_c == null ? '--' : `${Math.round(m.temp_c)} °C`;
+    s += `UP ${uptime(m.uptime_s | 0)}  ${m.fps} FPS  ${Number(m.frame_kb).toFixed(1)} KB  TEMP ${temp}\n`;
+    s += 'rssi_dbm' in m
+      ? `SIG ${m.rssi_dbm} dBm  LOSS ${Number(m.loss_pct).toFixed(1)}%  ${(m.video_kbps / 1000).toFixed(1)} Mbit/s` +
+        ('tx_dbm' in m ? `  TX ${Number(m.tx_dbm).toFixed(1)} dBm` : '')
+      : 'SIG --';
+  } else {
+    s += cam.video ? 'NO TELEMETRY' : 'not heard';
+  }
+  t.text.textContent = s;  // telemetry is shown as text, never as markup
+}
+
+async function poll() {
+  try {
+    const r = await fetch(`/status.json?${Date.now()}`, { cache: 'no-store' });
+    const s = await r.json();
+    s.cams.forEach((cam, i) => show(i, cam));
+    document.getElementById('state').textContent = `up ${uptime(s.uptime_s)}`;
+  } catch (e) {
+    document.getElementById('state').textContent = 'base station not answering';
+  }
+  setTimeout(poll, 1000);
+}
+poll();
+</script>
+</body>
+</html>

@@ -1,6 +1,7 @@
 // RFC 2435 RTP/JPEG: what jpeg_parse accepts, packet layout, packetize -> depacketize, loss, and a real
 // decoder: GStreamer's rtpjpegdepay ! jpegdec (what receiver.sh uses) must decode our packets to the
-// same pixels as the original JPEG.
+// same pixels as the original JPEG. The streamer (the base station's web view) must give the
+// depacketizer's bytes for whole frames, and cut off frames with a packet missing.
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -151,6 +152,94 @@ static void check_packets_and_round_trip()
     CHECK(small.send_frame(jpeg.data(), jpeg.size(), 0) == RTP_JPEG_BAD_CONFIG);
 }
 
+// Collects what rtp_jpeg_streamer hands on: one entry per JPEG, and whether it ended complete.
+struct jpeg_list : jpeg_stream_sink
+{
+    std::vector<std::vector<uint8_t>> jpegs;
+    std::vector<bool> complete;
+    bool open = false;
+    void jpeg_begin() override
+    {
+        CHECK(!open);  // every begin has its end
+        jpegs.emplace_back();
+        open = true;
+    }
+    void jpeg_data(const uint8_t *data, size_t size) override
+    {
+        CHECK(open);
+        if (open)
+        {
+            jpegs.back().insert(jpegs.back().end(), data, data + size);
+        }
+    }
+    void jpeg_end(bool done) override
+    {
+        CHECK(open);
+        complete.push_back(done);
+        open = false;
+    }
+};
+
+static void check_streamer()
+{
+    std::vector<uint8_t> jpeg = read_file(DATA_DIR "/test_422.jpg");
+    packet_list out;
+    rtp_jpeg_packetizer packetizer(out, rtp_jpeg_config());
+    for (int i = 0; i < 6; i++)
+    {
+        CHECK(packetizer.send_frame(jpeg.data(), jpeg.size(), 3600 * i) == RTP_JPEG_OK);
+    }
+    const size_t per_frame = out.packets.size() / 6;
+    CHECK(per_frame > 3);
+
+    // The depacketizer's JPEG for a whole frame
+    static uint8_t frame[65536], scan[65536];
+    rtp_jpeg_depacketizer depacketizer(frame, sizeof(frame), scan, sizeof(scan));
+    size_t whole = 0;
+    for (size_t i = 0; i < per_frame; i++)
+    {
+        whole = depacketizer.push(out.packets[i].data(), out.packets[i].size());
+    }
+    CHECK(whole > 0);
+
+    // Frame 0 joined mid-way (skipped), 1 whole, 2 loses a middle packet, 3 loses its last (marker) packet,
+    // 4 and 5 whole
+    jpeg_list got;
+    rtp_jpeg_streamer streamer(got);
+    for (size_t i = 0; i < out.packets.size(); i++)
+    {
+        size_t frame_no = i / per_frame, k = i % per_frame;
+        if ((frame_no == 0 && k == 0) || (frame_no == 2 && k == 2) || (frame_no == 3 && k == per_frame - 1))
+        {
+            continue;
+        }
+        streamer.push(out.packets[i].data(), out.packets[i].size());
+    }
+    CHECK(got.jpegs.size() == 5 && got.complete.size() == 5 && !got.open);
+    CHECK(streamer.frames == 3 && streamer.frames_cut == 2);
+    if (got.jpegs.size() == 5 && got.complete.size() == 5)
+    {
+        const bool expect[] = {true, false, false, true, true};
+        for (int j = 0; j < 5; j++)
+        {
+            CHECK(got.complete[j] == expect[j]);
+            if (expect[j])
+            {
+                CHECK(got.jpegs[j].size() == whole && memcmp(got.jpegs[j].data(), frame, whole) == 0);  // byte for byte
+            }
+            else
+            {
+                // Cut off: the start of the whole JPEG, up to where the packet went missing
+                CHECK(got.jpegs[j].size() < whole && memcmp(got.jpegs[j].data(), frame, got.jpegs[j].size()) == 0);
+            }
+        }
+        jpeg_info info;
+        CHECK(jpeg_parse(got.jpegs[0].data(), got.jpegs[0].size(), &info) == RTP_JPEG_OK);
+        printf("streamer: %u whole frames identical to the depacketizer's (%zu bytes), %u cut off\n", streamer.frames,
+               whole, streamer.frames_cut);
+    }
+}
+
 // GStreamer decodes the JPEG file directly, and our RTP packets through rtpjpegdepay: same pixels.
 static void check_gstreamer()
 {
@@ -201,6 +290,7 @@ int main()
 {
     check_parse();
     check_packets_and_round_trip();
+    check_streamer();
     check_gstreamer();
     return check_result("test_rtp_jpeg");
 }

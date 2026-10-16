@@ -43,8 +43,13 @@ python3 "$IDF_PATH/tools/idf_tools.py" install cmake ninja >/dev/null
 
 ./idf.sh idf.py --version
 
-# Flashing needs the USB serial adapter: on Arch it belongs to uucp, elsewhere to dialout.
-port_group=$(getent group uucp >/dev/null && echo uucp || echo dialout)
+# Flashing needs the USB serial adapter: the group that owns a plugged-in one, else dialout (Debian, Ubuntu,
+# Fedora; Ubuntu also has a uucp group, which doesn't own the ports), else uucp (Arch).
+port_group=""
+for p in /dev/ttyUSB* /dev/ttyACM*; do
+  [[ -e $p ]] && port_group=$(stat -c %G "$p") && break
+done
+[[ -n $port_group ]] || port_group=$(getent group dialout >/dev/null && echo dialout || echo uucp)
 if ! id -nG | grep -qw "$port_group"; then
   echo
   echo "to flash without sudo, add yourself to $port_group and log in again:"

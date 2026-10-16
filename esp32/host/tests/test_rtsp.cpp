@@ -174,5 +174,31 @@ int main()
     unlink((tmp + "_direct.yuv").c_str());
     printf("server: %u packets sent, %u dropped\n", server.sent, server.dropped);
     CHECK(server.playing(1) == 0);  // the clients left
+
+    // may_send says no (the base station low on RAM): the reply waits in the server; then it goes
+    {
+        static bool allow = false;
+        rtsp_server held;
+        rtsp_config cfg;
+        cfg.port = free_tcp_port();
+        cfg.max_clients = 1;
+        cfg.client_buffer = 4096;
+        cfg.may_send = [](size_t) { return allow; };
+        CHECK(held.start(cfg, names, 3));
+        std::string fd2 = request(cfg.port, "OPTIONS rtsp://127.0.0.1/cam0 RTSP/1.0\r\nCSeq: 9\r\n\r\n");
+        int raw = atoi(fd2.c_str());
+        for (int i = 0; i < 10; i++)
+        {
+            held.poll(10);
+        }
+        char buf[512];
+        CHECK(recv(raw, buf, sizeof(buf), MSG_DONTWAIT) <= 0);
+        allow = true;
+        for (int i = 0; i < 10; i++)
+        {
+            held.poll(10);
+        }
+        CHECK(read_reply(fd2).find("CSeq: 9") != std::string::npos);
+    }
     return check_result("test_rtsp");
 }

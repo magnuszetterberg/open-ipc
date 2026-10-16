@@ -1,0 +1,233 @@
+#!/usr/bin/env bash
+# open-ipc's front door: the few things people do, one command each. Run with no arguments for the list.
+# It finds ports and addresses by itself and calls the other scripts, which keep working on their own.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+STATE=${XDG_STATE_HOME:-$HOME/.local/state}/open-ipc
+BASE_FILE=$STATE/base-address       # the base station's address, saved by "flash base"
+BOARDS_FILE=$STATE/boards           # which board was flashed in which USB socket, for "log"
+
+usage() {
+  cat <<'EOF'
+open-ipc: what do you want to do?
+
+  ./ipc flash camera N        set up camera N (0, 1 or 2): plug it in when asked
+  ./ipc flash base            set up the base station (the ESP32-POE)
+  ./ipc view                  open the base station's web page: every camera, live
+  ./ipc stream N URL          camera N to the video server (rtmp://...) with its telemetry
+                              burned in; or a file name (cam0.mkv) to record, or nothing for a window
+  ./ipc log                   show what a board plugged into this PC is doing
+  ./ipc setup                 first time on a new PC: installs the tools
+
+  Add --port /dev/ttyUSBx to "flash" or "log" to name the port instead of plugging in.
+EOF
+}
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'ipc: %s\n' "$*" >&2; exit 1; }
+
+# The USB serial ports there are right now (looked up each time: boards come and go).
+ports_now() {
+  local p
+  for p in /dev/ttyUSB* /dev/ttyACM*; do [[ -e $p ]] && printf '%s\n' "$p"; done
+  return 0
+}
+
+# The USB socket a port's adapter is plugged into: stays the same when the port's name changes.
+usb_socket() {
+  udevadm info -q property -n "$1" 2>/dev/null | grep -oP '^ID_PATH=\K.*' || true
+}
+
+remember_board() {
+  local socket
+  socket=$(usb_socket "$1")
+  [[ -n $socket ]] || return 0
+  { grep -v "^$socket " "$BOARDS_FILE" 2>/dev/null || true; printf '%s %s\n' "$socket" "$2"; } >"$BOARDS_FILE.new"
+  mv "$BOARDS_FILE.new" "$BOARDS_FILE"
+}
+
+board_name() {
+  local socket
+  socket=$(usb_socket "$1")
+  [[ -n $socket && -f $BOARDS_FILE ]] && grep "^$socket " "$BOARDS_FILE" | cut -d' ' -f2- || true
+}
+
+# Waits for a USB serial port that wasn't there before, and prints it.
+wait_for_new_port() {
+  local what=$1 before now p
+  before=$(ports_now)
+  say "Plug $what into this PC now (USB data cable; a charge-only cable shows nothing)." >&2
+  if [[ -n $before ]]; then
+    say "  (already plugged in? Unplug it and plug it back in, or use --port.)" >&2
+  fi
+  for _ in $(seq 1 240); do
+    now=$(ports_now)
+    for p in $now; do
+      if ! grep -qx "$p" <<<"$before"; then
+        sleep 1  # let the port settle
+        say "  found it on $p" >&2
+        printf '%s\n' "$p"
+        return 0
+      fi
+    done
+    before=$now  # one unplugged meanwhile: its return counts as new
+    sleep 0.5
+  done
+  die "no new USB serial port within 2 minutes. Ports now: $(ports_now | tr '\n' ' ')"
+}
+
+# The board's boot log for a few seconds (connecting restarts it).
+boot_log() {
+  timeout "$2" esp32/idf.sh python3 esp32/monitor.py "$1" 2>/dev/null | tr -d '\r' || true
+}
+
+# This PC's address on the LAN: where the base station should send telemetry.
+pc_address() {
+  ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1
+}
+
+base_address() {
+  if [[ -n ${BASE:-} ]]; then
+    printf '%s\n' "$BASE"
+  elif [[ -s $BASE_FILE ]]; then
+    cat "$BASE_FILE"
+  else
+    die "I don't know the base station's address yet. Run ./ipc flash base, or give it: BASE=192.168.1.x ./ipc $*"
+  fi
+}
+
+flash_camera() {
+  local n=$1 port=$2 log
+  [[ $n =~ ^[012]$ ]] || die "camera number must be 0, 1 or 2"
+  [[ -n $port ]] || port=$(wait_for_new_port "camera $n (the ESP32-CAM on its USB board)")
+  say "Building and flashing camera $n on $port (the first build takes a few minutes)..."
+  CAM=$n ESPPORT=$port esp32/build.sh camera flash >"$STATE/flash.log" 2>&1 ||
+    die "flashing failed; the details are in $STATE/flash.log"
+  remember_board "$port" "camera $n"
+  say "Checking that it sends video..."
+  log=$(boot_log "$port" 15)
+  if grep -q "wfb-ng link .* port $n," <<<"$log" && grep -qE 'video: [1-9][0-9]* fps' <<<"$log"; then
+    say "  $(grep -oE 'video: [0-9]+ fps, [0-9]+ KB/frame' <<<"$log" | tail -1)"
+    say "Done: camera $n is sending. Unplug it and power it from any USB charger."
+  elif grep -q "wfb-ng link .* port $n," <<<"$log"; then
+    say "Flashed as camera $n, but no video yet: is the camera module seated? Watch it with ./ipc log --port $port"
+  else
+    say "Flashed, but I couldn't see it start. Watch it with: ./ipc log --port $port"
+  fi
+}
+
+flash_base() {
+  local port=$1 to log addr
+  to=${SEND_TO:-$(pc_address)}
+  [[ -n $to ]] || die "can't tell this PC's LAN address; give it: SEND_TO=192.168.1.x ./ipc flash base"
+  [[ -n $port ]] || port=$(wait_for_new_port "the base station (ESP32-POE)")
+
+  # Telemetry (and camera 0's video for receiver.sh) goes to this PC: a build-time setting (menuconfig, R8)
+  # in the local base/sdkconfig, which a first build creates.
+  [[ -f esp32/base/sdkconfig ]] || esp32/build.sh base reconfigure >"$STATE/flash.log" 2>&1 ||
+    die "setting up the base build failed; the details are in $STATE/flash.log"
+  sed -i "s/^CONFIG_BASE_OUT_HOST=.*/CONFIG_BASE_OUT_HOST=\"$to\"/" esp32/base/sdkconfig
+
+  say "Building and flashing the base station on $port (the first build takes a few minutes)..."
+  ESPPORT=$port esp32/build.sh base flash >"$STATE/flash.log" 2>&1 ||
+    die "flashing failed; the details are in $STATE/flash.log"
+  remember_board "$port" "base station"
+  say "Checking that it starts..."
+  log=$(boot_log "$port" 25)
+  addr=$(grep -oP 'eth: address \K[0-9.]+' <<<"$log" | tail -1 || true)
+  if [[ -z $addr ]]; then
+    say "Flashed, but it got no network address: is the Ethernet cable in? Watch it with: ./ipc log --port $port"
+    return
+  fi
+  printf '%s\n' "$addr" >"$BASE_FILE"
+  say "Done: the base station is at $addr."
+  say "  web page:  http://$addr/          (./ipc view)"
+  say "  RTSP:      rtsp://$addr:8554/cam0 ... cam2"
+  say "  telemetry: to this PC ($to), UDP 5610-5612"
+  if command -v ufw >/dev/null && systemctl is-active -q ufw 2>/dev/null; then
+    say "  If you haven't yet, let it through this PC's firewall (once):"
+    say "    sudo ufw allow from $addr to any port 5600:5612 proto udp"
+  fi
+  grep -oE 'cam[0-2]: [0-9]+ frames \(rssi -?[0-9]+\)' <<<"$log" | sort -u -k1,1 | sed 's/^/  hears /' || true
+}
+
+pick_port() {
+  local ports
+  mapfile -t ports < <(ports_now)
+  case ${#ports[@]} in
+    0) die "no board plugged into this PC" ;;
+    1) printf '%s\n' "${ports[0]}" ;;
+    *)
+      say "More than one board is plugged in:" >&2
+      local i
+      for i in "${!ports[@]}"; do say "  $((i + 1))) ${ports[$i]}  $(board_name "${ports[$i]}")" >&2; done
+      read -rp "Which one? " i
+      [[ $i =~ ^[0-9]+$ && $i -ge 1 && $i -le ${#ports[@]} ]] || die "no such board"
+      printf '%s\n' "${ports[$((i - 1))]}" ;;
+  esac
+}
+
+# First time on a PC: what flashing needs, then the extras, each saying what it's for.
+setup() {
+  if [[ ! -f wfb-ng/src/wifibroadcast.hpp ]]; then
+    say "Fetching wfb-ng (the firmware is built from its code)..."
+    git submodule update --init --depth 1 wfb-ng
+  fi
+  say "Installing the ESP32 tools (ESP-IDF, about 2 GB, 10-20 minutes the first time)..."
+  esp32/setup.sh || die "the ESP32 tools aren't installed: install what it lists above, then run ./ipc setup again"
+
+  say ""
+  say "Extras:"
+  if command -v ffmpeg >/dev/null; then
+    say "  ffmpeg: there (./ipc stream)"
+  else
+    say "  ffmpeg: missing, needed by ./ipc stream. Install the 'ffmpeg' package."
+  fi
+  if ./build.sh >"$STATE/wfb-ng-build.log" 2>&1; then
+    say "  wfb-ng: built (the PC-to-PC radio link, tx.sh and rx.sh)"
+  else
+    say "  wfb-ng: not built; only the PC-to-PC radio link (tx.sh, rx.sh) needs it. To build it:"
+    sed 's/^/    /' "$STATE/wfb-ng-build.log"
+  fi
+  say ""
+  say "Ready. Next: ./ipc flash camera 0 (or ./ipc flash base)."
+}
+
+open_url() {
+  say "$1"
+  if command -v xdg-open >/dev/null; then
+    xdg-open "$1" >/dev/null 2>&1 || true
+  fi
+}
+
+# --port PATH, anywhere in the arguments
+port=""
+args=()
+while (($#)); do
+  case $1 in
+    --port) port=${2:-}; [[ -n $port ]] || die "--port needs a port, e.g. --port /dev/ttyUSB0"; shift 2 ;;
+    -h|--help|help) usage; exit 0 ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+set -- "${args[@]}"
+mkdir -p "$STATE"
+
+case "${1:-} ${2:-}" in
+  "flash camera") flash_camera "${3:-}" "$port" ;;
+  "flash base") flash_base "$port" ;;
+  "view "*) addr=$(base_address view); open_url "http://$addr/" ;;
+  "stream "*)
+    n=${2:-}
+    [[ $n =~ ^[012]$ ]] || die "which camera? ./ipc stream 0 rtmp://server/app/cam0"
+    addr=$(base_address stream "$n")
+    say "Camera $n from the base station ($addr), telemetry burned in. Ctrl-C stops."
+    say "  (\"NO TELEMETRY\" on the video: the base station sends it to another PC, or this PC's firewall drops it;"
+    say "   ./ipc flash base sets it up for this PC.)"
+    VIDEO_IN=rtsp://$addr:8554/cam$n TELEMETRY_PORT=$((5610 + n)) exec ./burnin.sh "${3:-}" ;;
+  "log "*) [[ -n $port ]] || port=$(pick_port); exec esp32/monitor.sh "$port" -t ;;
+  "setup "*) setup ;;
+  " ") usage ;;
+  *) usage; exit 1 ;;
+esac

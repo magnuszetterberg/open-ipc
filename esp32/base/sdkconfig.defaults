@@ -2,3 +2,5 @@
 CONFIG_IDF_TARGET="esp32"
 # The ground side of the link uses gs.key (R9)
 CONFIG_WFB_KEY_FILE="keys/gs.key"
+# RTSP (listener, UDP, clients), the UDP outputs and the web view (listener, clients, one to turn away)
+CONFIG_LWIP_MAX_SOCKETS=16

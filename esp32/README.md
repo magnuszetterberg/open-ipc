@@ -59,8 +59,9 @@ The core components build for Linux too (R4), against the system libsodium, usin
 | `test_rx` | our transmitter into our receiver, with and without loss; wrong channel or key gets nothing |
 | `test_wfb_ng` | our transmitter into the real `wfb_rx`, and the real `wfb_tx` into our receiver |
 | `test_80211` | the 802.11 header: the address bytes `wfb_rx` filters on, the sequence number |
-| `test_rtp_jpeg` | RTP/JPEG: which JPEGs are accepted, packet layout, round trip, loss, GStreamer decoding our packets |
+| `test_rtp_jpeg` | RTP/JPEG: which JPEGs are accepted, packet layout, round trip, loss, GStreamer decoding our packets; the streamer's JPEGs the same as the depacketizer's |
 | `test_rtsp` | the RTSP server's replies, and ffmpeg playing a stream over TCP and UDP |
+| `test_web` | the web server's page, status and errors; ffmpeg playing a camera's MJPEG; JPEGs cut off by lost packets; a stuck viewer not holding up the others |
 
 ## Camera video (M2)
 
@@ -72,13 +73,14 @@ VIDEO=jpeg ./rx.sh
 
 The video window opens with the first frame. `esp32/monitor.sh` shows the ESP32's side once a second: `video: 25 fps, 10 KB/frame, 200 packets/s, 300 frames/s on air, 0 dropped by WiFi`. Frame size, JPEG quality and whether each frame finishes its FEC block are in `idf.py menuconfig` under "Camera".
 
-## Base station (M4, M5)
+## Base station (M4, M5, M7)
 
 `base/` is the base-station firmware for the Olimex ESP32-POE. It receives up to three cameras' wfb-ng streams in promiscuous mode (camera N: video on radio port N, telemetry on 0x10 + N), decodes them with the same core as the NUC, and serves them over Ethernet:
 
 - each camera's video as RTSP, `rtsp://<base station>:8554/cam0` ... `cam2`, RTP/JPEG passed through (VLC, ffmpeg and GStreamer play it);
 - each camera's telemetry as UDP to the host set under "Ethernet out" (port 5610 + N), with the signal quality the base station measures added (`rssi_dbm`, `loss_pct`, `video_kbps`);
-- camera 0's video also as UDP to that host's port 5600, for `VIDEO=jpeg ./receiver.sh` (M4's check).
+- camera 0's video also as UDP to that host's port 5600, for `VIDEO=jpeg ./receiver.sh` (M4's check);
+- a web view at `http://<base station>/` (M7): a tile per camera with its live video and its telemetry and signal quality, in any browser. Each camera's video is also at `http://<base station>/camN.mjpg` (MJPEG, the cameras' JPEGs rebuilt from RTP/JPEG, not re-encoded; `ffplay` and VLC play it too), and the telemetry at `/status.json`.
 
 ```sh
 ESPPORT=/dev/ttyUSB1 esp32/build.sh base flash
@@ -99,9 +101,23 @@ To push a camera to the RTMP server with its telemetry burned in, on the host th
 VIDEO_IN=rtsp://<base station>:8554/cam0 TELEMETRY_PORT=5610 ./burnin.sh rtmp://<server>/<app>/cam0
 ```
 
-Once a second the base station prints, per camera, frames and RSSI, frame rate, bitrate, FEC repairs and losses, telemetry messages and RTSP clients; and overall, what the radio heard, RTSP packets sent and dropped, Ethernet link drops and free RAM.
+Once a second the base station prints, per camera, frames and RSSI, frame rate, bitrate, FEC repairs and losses, telemetry messages, RTSP clients and web viewers (and how many of their JPEGs were cut off by packets lost on air); and overall, what the radio heard, RTSP packets sent and dropped, web JPEGs sent whole, cut off and skipped, Ethernet link drops, and free RAM with its lowest point in that second.
 
-The ESP32-POE has no PSRAM. Three cameras fit with a receive ring of one FEC block per stream (enough on a radio that delivers in order; `test_rx` checks it), 8 receive slots and 2 RTSP clients: measured on an ESP32 with three receivers, 66 KB of RAM is left before Ethernet and RTSP. "Ethernet" can be turned off in menuconfig, to run the firmware on an ESP32-CAM as a stand-in receiver.
+The ESP32-POE has no PSRAM, so RAM decides how much it can serve. Three cameras fit with a receive ring of one FEC block per stream (enough on a radio that delivers in order; `test_rx` checks it), 8 receive slots, and telemetry packets of at most 512 bytes: 76 KB of RAM is left before Ethernet, and about 30 KB once Ethernet, RTSP (2 clients of 4 KB) and the web view (4 connections of 2 KB) are up. Video for clients sits in TCP's buffers, on the heap, while it waits to be acknowledged; run dry, and the radio loses frames for every camera. So the servers hold data back while sending it would leave less than "RAM kept free for receiving" (10 KB), and a viewer that falls behind loses frames, not the others.
+
+What it can serve, measured on the ESP32-POE with one camera (25 fps, about 2.1 Mbit/s) and the clients on WiFi, 20 s each:
+
+| clients at once | each got | lowest free RAM |
+|---|---|---|
+| 1 web viewer | 473 of 495 JPEGs whole; 11 of the rest cut by packets lost on air | 14.6 KB |
+| 3 web viewers | 92 % of JPEGs whole | 5.2 KB |
+| 2 RTSP clients | 451 of 500 frames, 2 % of packets dropped | 5.8 KB |
+| 1 web viewer + 1 RTSP client | 450 JPEGs whole; 448 RTSP frames | 4.3 KB |
+| 3 web viewers + 1 RTSP client | overloaded: RTSP 121 frames, the radio loses frames | 3.0 KB |
+
+So about three video connections at once, in any mix; a browser showing three cameras uses three. With three cameras, receiving takes three times the CPU, which isn't measured yet. A browser's JPEG with a packet lost on air arrives cut off where the packet went missing, and the next one is whole.
+
+"Ethernet" can be turned off in menuconfig, to run the firmware on an ESP32-CAM as a stand-in receiver (no RTSP and no web view).
 
 On the original ESP32, generating the Ethernet clock (as the ESP32-POE does) can be unstable while WiFi runs (ESP32 errata). The stats line counts Ethernet link drops to show it (#18).
 
@@ -134,6 +150,7 @@ Keep the ESP32 a metre or more from the Ralink stick: at 20 dBm, centimetres can
 | `components/rtp_jpeg/` | JPEG frames as RTP packets (RFC 2435) and back |
 | `components/eth/` | Ethernet on the Olimex ESP32-POE (LAN8720), and UDP out |
 | `components/rtsp_server/` | RTSP for the base station's camera streams (builds for Linux too) |
+| `components/web_server/` | the base station's web view: MJPEG, the page, the status document over HTTP (builds for Linux too) |
 | `base/` | base-station firmware (ESP-IDF project) |
 | `tools/counter_check.py` | checks the M1 counter stream on the receiver |
 
