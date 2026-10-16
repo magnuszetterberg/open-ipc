@@ -3,8 +3,8 @@
 ffmpeg's drawtext re-reads the file every frame. The file is replaced whole, never half-written.
 
 Telemetry: the ESP32-CAM's JSON messages on UDP (link.sh, or the base station, delivers them to 5610).
-Signal: the base station adds rssi_dbm, loss_pct and video_kbps to each message; on the NUC, the receiving
-wfb_rx's latest RX_ANT and PKT lines (link.sh keeps them in /tmp/open-ipc-rx.stats).
+Signal: the base station adds rssi_dbm, loss_pct and video_kbps to each message; on a PC receiving with
+link.sh, the receiving wfb_rx's latest RX_ANT and PKT lines (link.sh keeps them in /tmp/open-ipc-rx.stats).
 
 Usage: telemetry_overlay.py --out FILE [--port 5610] [--bind 127.0.0.1] [--stats /tmp/open-ipc-rx.stats]
 --bind 0.0.0.0 for the base station, which sends over the LAN; link.sh delivers to 127.0.0.1.
