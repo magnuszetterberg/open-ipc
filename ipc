@@ -34,6 +34,7 @@ PC to PC:
 Other:
   ./ipc keys               your own link keys instead of the shared test keys (then flash the boards again)
   ./ipc test               check the software on this PC (no boards needed)
+  ./ipc wfb-ng             is there a newer wfb-ng upstream? ./ipc wfb-ng update moves to it, if the tests pass
   ./ipc log                what a board plugged into this PC is doing
   ./ipc setup              first time on a new PC: installs the tools
 
@@ -320,6 +321,69 @@ run_tests() {
   fi
 }
 
+# wfb-ng is a submodule pinned to one commit (R2): every build uses known code, and moving the pin is a
+# commit of its own after the compatibility tests. "check" says whether upstream has moved on and what that
+# touches; "update" moves the pin, rebuilds, tests, and puts the old pin back if anything fails.
+wfb_ng() {
+  local cmd=${1:-check} pinned branch latest adapted changed ok
+  pinned=$(git rev-parse HEAD:wfb-ng)
+  say "Asking wfb-ng's repository for news..."
+  branch=$(git -C wfb-ng ls-remote --symref origin HEAD 2>/dev/null | sed -n 's|^ref: refs/heads/\([^[:space:]]*\).*|\1|p')
+  [[ -n $branch ]] || die "can't reach wfb-ng's repository (network?)"
+  git -C wfb-ng fetch -q origin "$branch" || die "fetching wfb-ng's $branch failed"
+  latest=$(git -C wfb-ng rev-parse FETCH_HEAD)
+  if [[ $latest == "$pinned" ]]; then
+    say "wfb-ng is up to date: pinned at ${pinned:0:7}, the same as upstream $branch."
+    return
+  fi
+  say "Upstream $branch is $(git -C wfb-ng rev-list --count "$pinned..$latest") commits ahead of the pin (${pinned:0:7} -> ${latest:0:7}):"
+  git -C wfb-ng log --format='  %h %cs %s' "$pinned..$latest" | head -15
+  changed=$(git -C wfb-ng diff --name-only "$pinned" "$latest" -- src/wifibroadcast.hpp src/zfex.c src/zfex.h)
+  if [[ -n $changed ]]; then
+    say "  The protocol or FEC code changed ($(echo $changed)): after updating, test on air too (./ipc receive with a camera)."
+  else
+    say "  The protocol and FEC code are unchanged: the cameras and base station stay compatible."
+  fi
+  # The code esp32/components/wfb_core adapts names the upstream commit it came from (R3).
+  adapted=$(grep -rhoE '[0-9a-f]{40} \(R3\)' esp32/components/wfb_core | cut -c1-40 | sort -u | head -1)
+  if [[ -n $adapted ]]; then
+    git -C wfb-ng cat-file -e "$adapted" 2>/dev/null || git -C wfb-ng fetch -q origin "$adapted" 2>/dev/null || true
+    changed=$(git -C wfb-ng diff --name-only "$adapted" "$latest" -- src/tx.cpp src/tx.hpp src/rx.cpp src/rx.hpp 2>/dev/null)
+    if [[ -n $changed ]]; then
+      say "  Upstream changed code our ESP32 core adapts ($(echo $changed)). It keeps working as it is; to bring"
+      say "  the changes over: git -C wfb-ng diff ${adapted:0:7} ${latest:0:7} -- $(echo $changed)"
+    fi
+  fi
+  if [[ $cmd != update ]]; then
+    say "To move to it: ./ipc wfb-ng update"
+    return
+  fi
+
+  say "Moving the pin to ${latest:0:7}, rebuilding and testing..."
+  git -C wfb-ng checkout -q "$latest"
+  if make -C wfb-ng -j"$(nproc)" all_bin >"$STATE/wfb-ng-build.log" 2>&1 &&
+     esp32/test.sh >"$STATE/test.log" 2>&1 &&
+     esp32/build.sh camera >"$STATE/flash.log" 2>&1 &&
+     esp32/build.sh base >>"$STATE/flash.log" 2>&1; then
+    say "  wfb-ng builds; the checks pass, including ours against its wfb_tx and wfb_rx; both firmwares build."
+  else
+    say "  Something failed (logs in $STATE): going back to ${pinned:0:7}."
+    git -C wfb-ng checkout -q "$pinned"
+    make -C wfb-ng -j"$(nproc)" all_bin >/dev/null 2>&1 || true
+    die "wfb-ng stays at ${pinned:0:7}"
+  fi
+  local msg="wfb-ng: move the pin to ${latest:0:7}"
+  if [[ -t 0 ]]; then
+    read -rp "Commit the new pin (only wfb-ng, a commit of its own)? [Y/n] " ok
+    if [[ $ok != [nN]* ]]; then
+      git commit -q -m "$msg" -m "Upstream $branch, $(git -C wfb-ng log -1 --format=%cs "$latest"). ./ipc wfb-ng update: the checks pass against its wfb_tx and wfb_rx, both firmwares build." -- wfb-ng
+      say "Committed: $msg"
+      return
+    fi
+  fi
+  say "Not committed yet. To commit it: git commit -m \"$msg\" -- wfb-ng"
+}
+
 # First time on a PC: what flashing needs, then the extras, each saying what it's for.
 setup() {
   if [[ ! -f wfb-ng/src/wifibroadcast.hpp ]]; then
@@ -382,6 +446,7 @@ case "${1:-} ${2:-}" in
   "send "*) send ;;
   "keys "*) keys "${2:-}" ;;
   "test "*) run_tests ;;
+  "wfb-ng "*) wfb_ng "${2:-}" ;;
   "log "*) [[ -n $port ]] || port=$(pick_port); exec esp32/monitor.sh "$port" -t ;;
   "setup "*) setup ;;
   " ") usage ;;
