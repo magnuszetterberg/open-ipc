@@ -2,10 +2,12 @@
 """Keeps a text file with the camera's latest telemetry and the link's signal quality, for burnin.sh:
 ffmpeg's drawtext re-reads the file every frame. The file is replaced whole, never half-written.
 
-Telemetry: the ESP32-CAM's JSON messages on UDP (link.sh delivers them to 5610).
-Signal: the receiving wfb_rx's latest RX_ANT and PKT lines (link.sh keeps them in /tmp/open-ipc-rx.stats).
+Telemetry: the ESP32-CAM's JSON messages on UDP (link.sh, or the base station, delivers them to 5610).
+Signal: the base station adds rssi_dbm, loss_pct and video_kbps to each message; on the NUC, the receiving
+wfb_rx's latest RX_ANT and PKT lines (link.sh keeps them in /tmp/open-ipc-rx.stats).
 
-Usage: telemetry_overlay.py --out FILE [--port 5610] [--stats /tmp/open-ipc-rx.stats]
+Usage: telemetry_overlay.py --out FILE [--port 5610] [--bind 127.0.0.1] [--stats /tmp/open-ipc-rx.stats]
+--bind 0.0.0.0 for the base station, which sends over the LAN; link.sh delivers to 127.0.0.1.
 """
 import argparse
 import json
@@ -70,11 +72,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", required=True)
     ap.add_argument("--port", type=int, default=5610)
+    ap.add_argument("--bind", default="127.0.0.1", help="address to listen on: 0.0.0.0 for the base station")
     ap.add_argument("--stats", default="/tmp/open-ipc-rx.stats")
     args = ap.parse_args()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(("127.0.0.1", args.port))
+    sock.bind((args.bind, args.port))
     sock.settimeout(0.25)
 
     telemetry, telemetry_at = None, 0.0
@@ -88,7 +91,11 @@ def main():
         except ValueError:
             pass  # not JSON: keep the last good message
         current = telemetry if time.monotonic() - telemetry_at <= STALE_S else None
-        text = compose(current, read_signal(args.stats))
+        if current is not None and "rssi_dbm" in current:  # through the base station: signal included
+            signal = (current["rssi_dbm"], current.get("loss_pct", 0.0), current.get("video_kbps", 0) / 1000)
+        else:
+            signal = read_signal(args.stats)
+        text = compose(current, signal)
         if text != last:
             write_atomic(args.out, text)
             last = text

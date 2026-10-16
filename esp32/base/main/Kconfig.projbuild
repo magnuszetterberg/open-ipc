@@ -12,41 +12,75 @@ menu "wfb-ng link"
         range 0x0 0xffffff
         default 0x0
 
-    config LINK_RADIO_PORT
-        int "Radio port of the camera to receive"
-        range 0 255
-        default 0
+    config BASE_CAMERAS
+        int "Cameras"
+        range 1 3
+        default 3
+        help
+            Camera N (0, 1, 2) sends video on radio port N and telemetry on port 0x10 + N (docs/DESIGN.md).
 
     config LINK_RING_SIZE
-        int "FEC blocks kept while waiting for missing packets"
+        int "FEC blocks kept per video stream while waiting for missing packets"
         range 1 40
-        default 4
+        default 1
         help
-            Each block costs about 12 x 1.5 KB of RAM. wfb_rx uses 40; that won't fit here.
+            Each block costs about 12 x 1.5 KB of RAM per camera. One block is enough on a radio that
+            delivers in order (test_rx checks it), and it is what lets three cameras fit without PSRAM.
+            wfb_rx on Linux keeps 40.
 
     config LINK_RX_SLOTS
         int "Received frames that can wait to be processed"
         range 4 64
-        default 16
+        default 8
         help
-            Each costs about 1.5 KB of internal RAM.
+            Each costs about 1.5 KB of internal RAM. Three cameras and Ethernet leave little to spare on an
+            ESP32 without PSRAM (#20).
 
 endmenu
 
 menu "Ethernet out"
 
+    config BASE_ETHERNET
+        bool "Ethernet (Olimex ESP32-POE)"
+        default y
+        help
+            Off: receive and report only, e.g. on an ESP32-CAM standing in as a base station for tests.
+            (The ESP32-POE's Ethernet pins include GPIO16/17, which the ESP32-CAM's PSRAM uses.)
+
+    config BASE_RTSP_PORT
+        int "RTSP port"
+        range 1 65535
+        default 8554
+        help
+            Each camera plays at rtsp://<base station>:<port>/camN.
+
+    config BASE_RTSP_CLIENTS
+        int "RTSP clients at once"
+        range 1 6
+        default 2
+        help
+            Each costs an 8 KB buffer.
+
     config BASE_OUT_HOST
-        string "Send video to (IPv4 address)"
+        string "Send camera 0's video and every camera's telemetry to (IPv4 address)"
         default ""
         help
-            Where the base station sends each camera's RTP/JPEG over UDP, e.g. the NUC running
-            VIDEO=jpeg ./receiver.sh. Empty: receive and report only.
+            Camera 0's RTP/JPEG goes there as UDP (e.g. the NUC running VIDEO=jpeg ./receiver.sh), and each
+            camera's telemetry, with the base station's signal quality added, goes to the telemetry port
+            + N (burnin.sh reads it). Empty: RTSP only.
 
     config BASE_OUT_PORT
-        int "UDP port"
+        int "Video UDP port"
         range 1 65535
         default 5600
         help
             receiver.sh listens on 5600.
+
+    config BASE_TELEMETRY_PORT
+        int "Telemetry UDP port, camera 0"
+        range 1 65535
+        default 5610
+        help
+            Camera N's telemetry goes to this port + N. burnin.sh reads 5610.
 
 endmenu

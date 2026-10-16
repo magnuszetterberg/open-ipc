@@ -6,7 +6,8 @@
 #   ./burnin.sh                             show it in a window
 #
 # Video in: RTP/JPEG on UDP 5600 (sudo ./link.sh rx), or VIDEO_IN=rtsp://... (the base station, M5).
-# Telemetry in: UDP 5610 and signal from /tmp/open-ipc-rx.stats, both from link.sh rx.
+# Telemetry in: UDP 5610 and signal from /tmp/open-ipc-rx.stats, both from link.sh rx; with VIDEO_IN,
+# UDP 5610 from the LAN, signal included (the base station sends to 5610 + camera).
 # Use it instead of receiver.sh/rx.sh: both listen on port 5600.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -15,6 +16,8 @@ OUT=${1:-}
 PORT=${PORT:-5600}
 VIDEO_IN=${VIDEO_IN:-}
 TELEMETRY_PORT=${TELEMETRY_PORT:-5610}
+# link.sh delivers on loopback; the base station sends over the LAN.
+TELEMETRY_BIND=${TELEMETRY_BIND:-$([[ -n $VIDEO_IN ]] && echo 0.0.0.0 || echo 127.0.0.1)}
 STATS_FILE=${STATS_FILE:-/tmp/open-ipc-rx.stats}
 BITRATE=${BITRATE:-2M}
 FPS=${FPS:-25}               # the camera's rate: 25 at 640x480 and 800x600, 50 at 320x240
@@ -30,7 +33,7 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 echo "waiting for telemetry..." >"$text"
-python3 telemetry_overlay.py --out "$text" --port "$TELEMETRY_PORT" --stats "$STATS_FILE" &
+python3 telemetry_overlay.py --out "$text" --port "$TELEMETRY_PORT" --bind "$TELEMETRY_BIND" --stats "$STATS_FILE" &
 overlay=$!
 sleep 0.3
 kill -0 "$overlay" 2>/dev/null || { echo "telemetry_overlay.py failed to start (is port $TELEMETRY_PORT in use?)" >&2; exit 1; }
