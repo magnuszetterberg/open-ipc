@@ -9,7 +9,8 @@
 //
 // The 802.11 header wfb-ng puts in front of each packet on air (core layer, R4).
 //
-// Adapted from RawSocketTransmitter::inject_packet in wfb-ng/src/tx.cpp, at submodule commit
+// Adapted from RawSocketTransmitter::inject_packet in wfb-ng/src/tx.cpp (framing) and from the capture
+// filter and Receiver::loop_iter in rx.cpp (unframing), at submodule commit
 // 59adeac09a35f416b396f06da7963dedc8fa3920 (R3), minus the radiotap header: the ESP32 sets the rate
 // with esp_wifi_config_80211_tx_rate() instead. wfb_rx keeps only frames whose second address is
 // 57:42 followed by channel_id, so these bytes are what decides whether the NUC hears the ESP32.
@@ -19,6 +20,13 @@
 #include <stdint.h>
 
 static const size_t WFB_80211_HEADER_SIZE = 24;
+
+// The receiving side: is this 802.11 frame (without its FCS) a wfb-ng frame, and for which channel?
+// The check is wfb_rx's capture filter, "ether[0x0a:2]==0x5742 && ether[0x0c:4] == channel_id" (rx.cpp),
+// plus the data frame type the framer sets; the header is stripped as Receiver::loop_iter does.
+// On success, *packet points into frame at the wfb-ng packet.
+bool wfb_80211_unframe(const uint8_t *frame, size_t frame_size, uint32_t *channel_id, const uint8_t **packet,
+                       size_t *packet_size);
 
 class wfb_80211_framer
 {

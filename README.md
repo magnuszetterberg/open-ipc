@@ -31,6 +31,35 @@ The defaults (channel 6, send on `wlan0`, receive on `wlan1`) match this setup. 
 | **Link** | about 1 m apart: RSSI -54 dBm, ~295 of ~300 frames/s received, 0-5/s repaired by FEC, none lost |
 | **Latency** | not measured yet; it looks acceptable by eye. The clock-photo measurement is part of M3 (#15). |
 
+What the camera sends at each setting (JPEG quality 12, MCS 3, FEC 8/12; measured on the ESP32-CAM, #15):
+
+| frame size | fps | KB/frame | RTP packets/s | frames on air/s, FEC block finished per frame | not finished |
+|---|---|---|---|---|---|
+| 320x240 | 50 | 4 | 200 | 599 | 298 |
+| 640x480 | 25 | 12 | 226 | 604 | 340 |
+| 800x600 | 25 | 18 | 326 | 598 | 484 |
+
+What a second ESP32-CAM (running `esp32/base`) received, on the same desk, with both boards' antennas as they are (#23), 2026-10-09. Each row averages 11 s. "Heard" is the share of frames on air that reached the receiver; "lost" is packets FEC couldn't repair, per second and as a share of the RTP packets sent.
+
+| setting | RSSI | heard | received fps (of sent) | lost |
+|---|---|---|---|---|
+| 640x480, MCS 3, FEC 8/12, block finished per frame | -81 dBm | 94% | 24.5 of 25 | 6/s (3%) |
+| 640x480, MCS 3, FEC 8/12 | -81 dBm | 89% | 24.5 of 25 | 9/s (5%) |
+| 640x480, MCS 1, FEC 8/12 | -83 dBm | 89% | 24.7 of 25 | 3/s (2%) |
+| 640x480, MCS 3, FEC 6/12 | -83 dBm | 80% | 24.8 of 25 | 7/s (3%) |
+| 320x240, MCS 3, FEC 8/12 | -84 dBm | 22-41% | 15-22 of 50 | most |
+| 800x600, MCS 3, FEC 8/12 | -85 dBm | 13-21% | 4 of 25 | most |
+| 640x480, MCS 5 | -83 dBm | nothing received | | |
+
+How far to trust it: the link was marginal and drifted. RSSI moved between -81 and -90 dBm over half an hour with nothing changed in the firmware, and by the end the receiver heard almost nothing at any setting. So the rows compare only roughly. What holds:
+
+- At about -81 dBm, 640x480 at 25 fps gets through with a few percent of packets lost after FEC.
+- MCS 5 needs a stronger signal than these boards manage; MCS 1 copes best when the signal is weak.
+- More FEC (6/12) repairs more but puts a third more frames on air for the same video.
+- The rest is set by the antennas: the NUC's Ralink stick hears the same camera at -54 dBm, the second ESP32-CAM at -81 to -90 dBm.
+
+Latency is not measured yet: it needs the clock-photo method (Measure latency, below).
+
 An earlier run lost 10-20% of frames at -74 dBm; a scan from the ESP32-CAM heard the home router 28 dB weaker than the NUC did, which points at the board's antenna (#23).
 
 What we learned about the hardware:
@@ -61,6 +90,8 @@ Pass these as environment variables in front of `./tx.sh` / `./rx.sh`:
 | `TX_POWER` | 2000 | transmit power in mBm (2000 = 20 dBm); some cards ignore it |
 | `MCS` | 3 | radio data rate (HT20 MCS 3 = 26 Mbit/s) |
 
+`link.sh rx` also receives an ESP32-CAM's telemetry stream (radio port 16) and delivers it to UDP 5610, and keeps the video receiver's latest signal stats in `/tmp/open-ipc-rx.stats`. To burn them into the video: `sudo ./link.sh rx` in one terminal, then `./burnin.sh rtmp://<server>/<app>/<name>` (or a file name, or nothing for a window) instead of `receiver.sh`. `burnin.sh` reads `FPS=25`, `BITRATE=2M`, `PORT`, `TELEMETRY_PORT`, `STATS_FILE`, and `VIDEO_IN=rtsp://...` for the base station's streams.
+
 `sender.sh` also reads `SOURCE=webcam|test`, `ENCODER=x264|vaapi`, `SIZE=1280x720`, `FPS=30`, `BITRATE=4M`, `DEVICE` and `PREVIEW=1`. `receiver.sh` reads `PLAYER=auto|gst|ffplay` and `VIDEO=h264|jpeg` (`jpeg` for the ESP32-CAM's RTP/JPEG; `VIDEO=jpeg ./rx.sh` passes it on). The GStreamer receiver needs gst-plugins-base, -good, -bad and gst-libav; if any are missing, it falls back to ffplay.
 
 ## Pieces
@@ -71,6 +102,8 @@ Pass these as environment variables in front of `./tx.sh` / `./rx.sh`:
 | `link.sh [tx\|rx]` | puts the card in monitor mode and runs `wfb_tx` / `wfb_rx` (needs sudo); with no argument, runs both ends on one machine with two cards (untested: on the NUC that means Intel sending, Ralink receiving) |
 | `sender.sh` | webcam or test pattern → H.264 → RTP; burns a `TX hh:mm:ss.mmm` timestamp into each frame |
 | `receiver.sh` | RTP → low-latency video window |
+| `burnin.sh` | ESP32-CAM video with its telemetry and signal quality burned in, as H.264: to RTMP, a file, or a window |
+| `telemetry_overlay.py` | keeps the overlay text for `burnin.sh`: telemetry from UDP 5610, signal from `link.sh`'s stats file |
 | `build.sh` | fetches and builds wfb-ng if needed |
 | `sniff.sh [iface]` | counts what a card hears in monitor mode on channel 36 (wfb-ng) and 128 (a router, as a control) |
 | `clock.html` | millisecond clock for latency photos |

@@ -3,3 +3,6 @@
 */sdkconfig
 */sdkconfig.old
 */managed_components/
+# Cameras 1 and 2 (CAM=N ./build.sh camera): their own build folder and sdkconfig.
+*/build-cam*/
+*/sdkconfig.cam*

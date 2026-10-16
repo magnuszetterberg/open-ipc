@@ -31,5 +31,23 @@ int main()
     CHECK(frame[22] == 0x10 && frame[23] == 0);
 
     CHECK(framer.frame(frame, WFB_80211_HEADER_SIZE + 4, packet, sizeof(packet)) == 0);  // too small
+
+    // Unframing what the framer made: the channel and the packet come back
+    size = framer.frame(frame, sizeof(frame), packet, sizeof(packet));
+    uint32_t got_channel = 0;
+    const uint8_t *got = nullptr;
+    size_t got_size = 0;
+    CHECK(wfb_80211_unframe(frame, size, &got_channel, &got, &got_size));
+    CHECK(got_channel == channel_id && got_size == sizeof(packet) && memcmp(got, packet, sizeof(packet)) == 0);
+
+    // Not ours: another frame type, another address, or nothing after the header
+    uint8_t other[64];
+    memcpy(other, frame, size);
+    other[0] = 0x80;  // beacon
+    CHECK(!wfb_80211_unframe(other, size, &got_channel, &got, &got_size));
+    memcpy(other, frame, size);
+    other[0x0b] = 0x43;
+    CHECK(!wfb_80211_unframe(other, size, &got_channel, &got, &got_size));
+    CHECK(!wfb_80211_unframe(frame, WFB_80211_HEADER_SIZE, &got_channel, &got, &got_size));
     return check_result("test_80211");
 }

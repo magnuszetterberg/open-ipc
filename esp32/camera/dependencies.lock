@@ -23,6 +23,20 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 1.3.1
+  espressif/lan87xx:
+    component_hash: 085305ca93c456f6731f38459f56b585c41c8c752a09a11f3cb55ea1a27c71e9
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=6.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32
+    - esp32p4
+    - esp32s31
+    version: 1.1.0
   espressif/libsodium:
     component_hash: d4066b373fc6d4c5196db42aeea7faef4ac7f3080af96c2b74e2476c08b78dc1
     dependencies:
@@ -39,7 +53,8 @@ dependencies:
     version: 6.0.3
 direct_dependencies:
 - espressif/esp32-camera
+- espressif/lan87xx
 - espressif/libsodium
-manifest_hash: ae8bc33e1243a477e19c19ba19aa9cdf79fd1459e27caea751e487e5c4d16be1
+manifest_hash: 3af116d4cec1d8761b7cf46e65cf50dcc60e454326f100a3179783e7c632f9a5
 target: esp32
 version: 3.0.0
