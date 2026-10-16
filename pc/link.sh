@@ -10,7 +10,8 @@
 #
 # Video in:  UDP 127.0.0.1:5602  (PORT=5602 ./sender.sh)
 # Video out: UDP 127.0.0.1:5600  (./receiver.sh)
-# Telemetry out: UDP 127.0.0.1:5610, from an ESP32-CAM's telemetry stream (radio port 16)
+# Telemetry out: UDP 127.0.0.1:5610, from the camera's telemetry stream (radio port 16 + CAM)
+# CAM=N receives camera N (default 0): its video on radio port N, its telemetry on 0x10 + N (docs/DESIGN.md)
 # Receiver stats: the video wfb_rx's latest RX_ANT and PKT lines in /tmp/open-ipc-rx.stats
 # Ctrl-C hands the adapter(s) back to NetworkManager.
 set -euo pipefail
@@ -27,7 +28,9 @@ TX_POWER=${TX_POWER:-500}   # mBm; 5 dBm suits both ends on one machine (tx.sh u
 IN_PORT=${IN_PORT:-5602}
 OUT_PORT=${OUT_PORT:-5600}
 TELEMETRY_PORT=${TELEMETRY_PORT:-5610}
-TELEMETRY_RADIO_PORT=16      # ESP32-CAM 0's telemetry (docs/DESIGN.md: 0x10 + camera index)
+CAM=${CAM:-0}
+[[ $CAM =~ ^[0-9]$ ]] || { echo "CAM must be a camera number, 0-9" >&2; exit 1; }
+TELEMETRY_RADIO_PORT=$((16 + CAM))   # docs/DESIGN.md: 0x10 + camera index
 STATS_FILE=${STATS_FILE:-/tmp/open-ipc-rx.stats}
 WFB=../wfb-ng
 
@@ -98,7 +101,7 @@ done
 if [[ $ROLE != tx ]]; then
   iw dev "$RX_IF" info | grep -E 'Interface|type|channel'
   # Its stats lines also go to $STATS_FILE: the latest RX_ANT (signal) and PKT (loss) pair, for burn-in.
-  "$WFB/wfb_rx" -K "$GS_KEY" -p 0 -c 127.0.0.1 -u "$OUT_PORT" "$RX_IF" \
+  "$WFB/wfb_rx" -K "$GS_KEY" -p "$CAM" -c 127.0.0.1 -u "$OUT_PORT" "$RX_IF" \
     > >(tee >(awk -v f="$STATS_FILE" '/\tRX_ANT\t/ {ant = $0} /\tPKT\t/ {print ant > f; print > f; close(f)}') \
         | sed -u 's/^/[rx] /') 2>&1 &
   pids+=($!)
@@ -114,5 +117,6 @@ if [[ $ROLE != rx ]]; then
   pids+=($!)
 fi
 
+[[ $ROLE == tx ]] || echo "receiving camera $CAM"
 echo "link up ($ROLE, channel $CHANNEL). Video in: UDP :$IN_PORT, out: UDP :$OUT_PORT. Telemetry out: UDP :$TELEMETRY_PORT. Ctrl-C to stop."
 wait

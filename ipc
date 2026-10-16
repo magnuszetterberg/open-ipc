@@ -25,8 +25,8 @@ Receive the cameras with the base station (up to 3 cameras, anywhere on the netw
                            or a file name (cam0.mkv) to record, or nothing for a window
 
 Or with this PC's own WiFi adapter (no base station):
-  ./ipc receive            what the adapter hears, in a window: camera 0, or a PC running ./ipc send
-  ./ipc receive URL        camera 0 to a video server (rtmp://...) with its telemetry burned in;
+  ./ipc receive [N]        what the adapter hears, in a window: camera N (default 0), or a PC running ./ipc send
+  ./ipc receive [N] URL    camera N to a video server (rtmp://...) with its telemetry burned in;
                            or a file name (cam0.mkv) to record
 
 PC to PC:
@@ -273,12 +273,17 @@ adapter_for() {
 # What this PC's own adapter hears, no base station: link.sh rx and a window (rx.sh, which tells camera
 # JPEG from webcam H.264 by itself), or camera 0 with its telemetry burned in, to a server or a file.
 receive() {
-  local out=$1 iface
+  local cam=0 out iface
+  if [[ ${1:-} =~ ^[0-9]$ ]]; then
+    cam=$1
+    shift
+  fi
+  out=${1:-}
   iface=$(adapter_for rx)
   say "$(key_status)"
-  say "It asks for your password: the adapter is switched to monitor mode. Ctrl-C stops."
+  say "Receiving camera $cam. It asks for your password: the adapter is switched to monitor mode. Ctrl-C stops."
   if [[ -z $out ]]; then
-    RX_IF=$iface VIDEO=auto exec pc/rx.sh
+    RX_IF=$iface VIDEO=auto CAM=$cam exec pc/rx.sh
   fi
   pc/build-wfb-ng.sh
   sudo -v
@@ -287,7 +292,7 @@ receive() {
   RECEIVE_LINK=""
   trap stop_receive EXIT
   trap 'exit 130' INT TERM
-  sudo env RX_IF="$iface" pc/link.sh rx &
+  sudo env RX_IF="$iface" CAM="$cam" pc/link.sh rx &
   RECEIVE_LINK=$!
   sleep 2
   pc/burnin.sh "$out" || true
@@ -486,7 +491,7 @@ case "${1:-} ${2:-}" in
     say "  (\"NO TELEMETRY\" on the video: the base station sends it to another PC, or this PC's firewall drops it;"
     say "   ./ipc flash base sets it up for this PC.)"
     VIDEO_IN=rtsp://$addr:8554/cam$n TELEMETRY_PORT=$((5610 + n)) exec pc/burnin.sh "${3:-}" ;;
-  "receive "*) receive "${2:-}" ;;
+  "receive "*) receive "${2:-}" "${3:-}" ;;
   "send "*) send ;;
   "keys "*) keys "${2:-}" ;;
   "test "*) run_tests ;;
