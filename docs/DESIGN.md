@@ -158,7 +158,7 @@ esp32/
 
 1. **Host tests (every change to the core).** The core is built on Linux. Its frames are decoded by our own receive core and by the real `wfb_rx` built from the submodule. Real `wfb_tx` output is decoded by our receive core. How to feed frames to `wfb_rx` without a radio (a pcap file or its UDP aggregator mode) is worked out in M0.
 2. **On-air test (every change to radio or core).** ESP32 → NUC with `rx.sh`. Pass: `wfb_rx` counts packets, with no decryption errors and no lost FEC blocks at 1–2 m.
-3. **Latency (each milestone).** `clock.html`, as in the README. Results go into the README's results table, with the settings used.
+3. **Latency (each milestone).** `clock.html`, as in the README. Results go into the milestone's GitHub issue, with the settings used; the README is for getting the system running, not for results.
 
 ## Milestones
 
@@ -167,7 +167,7 @@ Each milestone ends with something that can be shown working. M6 doesn't depend 
 1. **M0 Toolchain and skeleton.** ESP-IDF installed, `esp32/` laid out, the core building on Linux with zfex and libsodium. Done when the host tests pass.
 2. **M1 On-air compatibility.** Any ESP32 sends wfb-ng frames with a test payload (a counter). Done when the NUC's unmodified `wfb_rx` decodes them and the counter arrives on port 5600.
 3. **M2 Camera video.** The ESP32-CAM sends RTP/JPEG. Done when `rx.sh` shows the video and the latency is measured.
-4. **M3 Tuning.** Measure frame rate, bitrate and latency against resolution, MCS and FEC. Done when the results are in the README.
+4. **M3 Tuning.** Measure frame rate, bitrate and latency against resolution, MCS and FEC. Done when the results are in its issues.
 5. **M4 Base-station receive.** An Ethernet ESP32 receives one camera and sends its RTP/JPEG over Ethernet to the NUC. Done when `receiver.sh` on the NUC shows it.
 6. **M5 Three cameras to the video server.** The base station receives three cameras and serves each as RTSP, with its telemetry and signal quality as UDP. Done when all three play from another machine, and one reaches the RTMP video server through the burn-in script with its telemetry burned in.
 7. **M6 Telemetry and burn-in.** The camera sends its uptime once a second on its telemetry port (and temperature, where the board has a sensor). On the NUC, the telemetry is received next to the video, and the burn-in script draws it, with signal quality, onto the video, encodes H.264 and pushes RTMP (or records a file when no server is given). Done when the output shows the telemetry burned in, updating every second.
