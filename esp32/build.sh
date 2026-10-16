@@ -18,12 +18,15 @@ fi
 
 # A Zephyr firmware (prj.conf: the radar camera on the FRDM-RW612) builds with west, not idf.py:
 #   ./build.sh radar [build] [flash] [menuconfig] [clean]    flash goes through the board's J-Link
+#   CAM=N ./build.sh radar flash      as camera N (default 2)
 if [[ -f $app/prj.conf ]]; then
   board=${BOARD:-frdm_rw612}
+  extra=()
+  [[ -n ${CAM:-} ]] && extra=(-- -DCONFIG_LINK_RADIO_PORT="$CAM")
   for cmd in "$@"; do
     case $cmd in
-      build) ./zephyr.sh west build -b "$board" -d "$app/build" "$app" ;;
-      flash) ./zephyr.sh west build -b "$board" -d "$app/build" "$app" && ./zephyr.sh west flash -d "$app/build" ;;
+      build) ./zephyr.sh west build -b "$board" -d "$app/build" "$app" "${extra[@]}" ;;
+      flash) ./zephyr.sh west build -b "$board" -d "$app/build" "$app" "${extra[@]}" && ./zephyr.sh west flash -d "$app/build" ;;
       menuconfig) ./zephyr.sh west build -b "$board" -d "$app/build" "$app" -t menuconfig ;;
       clean) rm -rf "$app/build" ;;
       *) echo "$app: build, flash, menuconfig or clean (a Zephyr firmware; ./ipc log shows its console)" >&2; exit 1 ;;

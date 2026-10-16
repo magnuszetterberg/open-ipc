@@ -17,12 +17,15 @@ open-ipc: what do you want to do?
 Set up the boards (once each):
   ./ipc flash camera N     a camera, N = 0, 1 or 2: plug it in when asked
   ./ipc flash base         the base station (ESP32-POE): plug it in when asked
-  ./ipc flash radar        the radar camera (FRDM-RW612): its MCU-Link USB-C plugged in (./ipc setup radar first)
+  ./ipc flash radar [N]    the radar camera (FRDM-RW612 + SR250), as camera N (default 2): its MCU-Link USB-C
+                           plugged in (./ipc setup radar first)
 
 Receive the cameras with the base station (up to 3 cameras, anywhere on the network):
   ./ipc view               every camera, live, in a browser
   ./ipc stream N URL       camera N to a video server (rtmp://...) with its telemetry burned in;
                            or a file name (cam0.mkv) to record, or nothing for a window
+     ... --radar M         with the radar camera M: its finding as text, its picture beside the camera's
+                           (RADAR_VIEW=text: the text only)
 
 Or with this PC's own WiFi adapter (no base station):
   ./ipc receive [N]        what the adapter hears, in a window: camera N (default 0), or a PC running ./ipc send
@@ -186,7 +189,8 @@ jlink_port() {
 }
 
 flash_radar() {
-  local port=$1 dev log group
+  local cam=${1:-2} port=$2 dev log group
+  [[ $cam =~ ^[0-9]$ ]] || die "the radar's camera number must be 0-9 (default 2)"
   esp32/zephyr.sh true 2>/dev/null || die "the radar camera's tools aren't installed yet: ./ipc setup radar"
   dev=$(jlink_device | head -1)
   [[ -n $dev ]] || die "no FRDM-RW612 found: plug its MCU-Link USB-C (J10) into this PC"
@@ -196,17 +200,19 @@ flash_radar() {
   echo 'SUBSYSTEM==\"usb\", ATTR{idVendor}==\"1366\", MODE=\"0660\", GROUP=\"$group\"' | sudo tee /etc/udev/rules.d/60-jlink.rules
   sudo udevadm control --reload && sudo udevadm trigger"
   fi
-  say "Building and flashing the radar camera (FRDM-RW612) through its J-Link..."
-  esp32/build.sh radar flash >"$STATE/flash.log" 2>&1 || die "flashing failed; the details are in $STATE/flash.log"
+  say "Building and flashing the radar camera (FRDM-RW612) as camera $cam, through its J-Link..."
+  CAM=$cam esp32/build.sh radar flash >"$STATE/flash.log" 2>&1 || die "flashing failed; the details are in $STATE/flash.log"
   [[ -n $port ]] || port=$(jlink_port)
   [[ -n $port ]] || die "flashed, but the J-Link's serial port is missing, so I can't check it"
-  remember_board "$port" "radar camera"
+  remember_board "$port" "radar camera $cam"
   say "  $(key_status)"
-  say "Checking that it sends..."
-  log=$(boot_log "$port" 8)
-  if grep -qE 'counter [0-9]+: [0-9]+ payloads/s, [1-9][0-9]* frames/s' <<<"$log"; then
-    say "  $(grep -oE 'counter [0-9]+: .*' <<<"$log" | tail -1)"
-    say "Done: the radar camera is sending. Watch it with ./ipc log --port $port"
+  say "Checking that it sends (the radar takes a few seconds to start)..."
+  log=$(boot_log "$port" 12)
+  if grep -qE 'radar: [1-9][0-9]* measurements/s, [1-9][0-9]* sent' <<<"$log"; then
+    say "  $(grep -oE 'radar: [0-9]+ measurements/s.*' <<<"$log" | tail -1)"
+    say "Done: the radar camera is sending as camera $cam. See it with ./ipc view (base station) or ./ipc receive $cam."
+  elif grep -q 'uwb: no ready message\|radar: not started' <<<"$log"; then
+    say "Flashed, but the SR250 doesn't answer: is the shield seated, with jumper wires D0-D11 and D1-D12? ./ipc log --port $port"
   else
     say "Flashed, but I couldn't see it send. Watch it with: ./ipc log --port $port"
   fi
@@ -465,12 +471,14 @@ open_url() {
   fi
 }
 
-# --port PATH, anywhere in the arguments
+# --port PATH and --radar N, anywhere in the arguments
 port=""
+radar=""
 args=()
 while (($#)); do
   case $1 in
     --port) port=${2:-}; [[ -n $port ]] || die "--port needs a port, e.g. --port /dev/ttyUSB0"; shift 2 ;;
+    --radar) radar=${2:-}; [[ $radar =~ ^[0-9]$ ]] || die "--radar needs the radar's camera number, e.g. --radar 2"; shift 2 ;;
     -h|--help|help) usage; exit 0 ;;
     *) args+=("$1"); shift ;;
   esac
@@ -481,7 +489,7 @@ mkdir -p "$STATE"
 case "${1:-} ${2:-}" in
   "flash camera") flash_camera "${3:-}" "$port" ;;
   "flash base") flash_base "$port" ;;
-  "flash radar") flash_radar "$port" ;;
+  "flash radar") flash_radar "${3:-2}" "$port" ;;
   "view "*) addr=$(base_address view); open_url "http://$addr/" ;;
   "stream "*)
     n=${2:-}
@@ -490,6 +498,10 @@ case "${1:-} ${2:-}" in
     say "Camera $n from the base station ($addr), telemetry burned in. Ctrl-C stops."
     say "  (\"NO TELEMETRY\" on the video: the base station sends it to another PC, or this PC's firewall drops it;"
     say "   ./ipc flash base sets it up for this PC.)"
+    if [[ -n $radar ]]; then
+      say "  With the radar camera $radar: its finding as text$([[ ${RADAR_VIEW:-beside} == beside ]] && echo ", its picture beside the camera's")."
+      export RADAR=$radar RADAR_IN=rtsp://$addr:8554/cam$radar
+    fi
     VIDEO_IN=rtsp://$addr:8554/cam$n TELEMETRY_PORT=$((5610 + n)) exec pc/burnin.sh "${3:-}" ;;
   "receive "*) receive "${2:-}" "${3:-}" ;;
   "send "*) send ;;
