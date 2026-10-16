@@ -55,4 +55,4 @@ if ! id -nG | grep -qw "$port_group"; then
   echo "to flash without sudo, add yourself to $port_group and log in again:"
   echo "  sudo usermod -aG $port_group $USER"
 fi
-echo "ESP-IDF $IDF_VERSION ready; build with ./build.sh or from VS Code (Terminal > Run Task)"
+echo "ESP-IDF $IDF_VERSION ready: flash the boards with ./ipc flash (or esp32/build.sh; VS Code: Terminal > Run Task)"

@@ -68,7 +68,7 @@ The core components build for Linux too (R4), against the system libsodium, usin
 The camera firmware sends the OV2640's JPEG frames as RTP/JPEG (RFC 2435) over wfb-ng: 640x480 at about 25 fps and 10 KB a frame, about 2 Mbit/s. On a PC with a WiFi adapter that receives in monitor mode (the main README's hardware notes):
 
 ```sh
-VIDEO=jpeg ./rx.sh
+./ipc receive
 ```
 
 The video window opens with the first frame. `esp32/monitor.sh` shows the ESP32's side once a second: `video: 25 fps, 10 KB/frame, 200 packets/s, 300 frames/s on air, 0 dropped by WiFi`. Frame size, JPEG quality and whether each frame finishes its FEC block are in `idf.py menuconfig` under "Camera".
@@ -79,7 +79,7 @@ The video window opens with the first frame. `esp32/monitor.sh` shows the ESP32'
 
 - each camera's video as RTSP, `rtsp://<base station>:8554/cam0` ... `cam2`, RTP/JPEG passed through (VLC, ffmpeg and GStreamer play it);
 - each camera's telemetry as UDP to the host set under "Ethernet out" (port 5610 + N), with the signal quality the base station measures added (`rssi_dbm`, `loss_pct`, `video_kbps`);
-- camera 0's video also as UDP to that host's port 5600, for `VIDEO=jpeg ./receiver.sh` (M4's check);
+- camera 0's video also as UDP to that host's port 5600, for `VIDEO=jpeg pc/receiver.sh` (M4's check);
 - a web view at `http://<base station>/` (M7): a tile per camera with its live video and its telemetry and signal quality, in any browser. Each camera's video is also at `http://<base station>/camN.mjpg` (MJPEG, the cameras' JPEGs rebuilt from RTP/JPEG, not re-encoded; `ffplay` and VLC play it too), and the telemetry at `/status.json`.
 
 `./ipc flash base` and `./ipc flash camera N` (the main README's Start here) do the flashing: they find the board's port, and for the base station they send the telemetry to the PC they run on. By hand, with the board's serial port:
@@ -100,7 +100,7 @@ CAM=2 ESPPORT=<port> esp32/build.sh camera flash    # camera 2: .../cam2
 To push a camera to the RTMP server with its telemetry burned in, on the host the telemetry goes to:
 
 ```sh
-VIDEO_IN=rtsp://<base station>:8554/cam0 TELEMETRY_PORT=5610 ./burnin.sh rtmp://<server>/<app>/cam0
+./ipc stream 0 rtmp://<server>/<app>/cam0     # runs pc/burnin.sh with the base station's RTSP
 ```
 
 Once a second the base station prints, per camera, frames and RSSI, frame rate, bitrate, FEC repairs and losses, telemetry messages, RTSP clients and web viewers (and how many of their JPEGs were cut off by packets lost on air); and overall, what the radio heard, RTSP packets sent and dropped, web JPEGs sent whole, cut off and skipped, Ethernet link drops, and free RAM with its lowest point in that second.
@@ -115,12 +115,12 @@ On the original ESP32, generating the Ethernet clock (as the ESP32-POE does) can
 
 ## On-air test (M1)
 
-Set "What to send" to "Counter" in `idf.py menuconfig` ("wfb-ng link"). The camera firmware then sends a counter over wfb-ng instead of video: 100 payloads of 1000 bytes a second, on channel 6 at HT20 MCS 3, link 0, port 0, FEC 8/12, with `keys/drone.key`. Those are the receiver's defaults in `link.sh`, so the receiving PC needs no changes. The settings are in `idf.py menuconfig` under "wfb-ng link" (R8).
+Set "What to send" to "Counter" in `idf.py menuconfig` ("wfb-ng link"). The camera firmware then sends a counter over wfb-ng instead of video: 100 payloads of 1000 bytes a second, on channel 6 at HT20 MCS 3, link 0, port 0, FEC 8/12, with `keys/drone.key`. Those are the receiver's defaults in `pc/link.sh`, so the receiving PC needs no changes. The settings are in `idf.py menuconfig` under "wfb-ng link" (R8).
 
 1. Flash it: `esp32/build.sh camera flash`, then watch `esp32/monitor.sh`. Each second it prints a line like `counter 402: 100 payloads/s, 153 frames/s, 0 dropped by WiFi`.
 2. On the receiving PC, either:
-   - `./rx.sh`: the `[rx]` lines show wfb_rx's stats every second, `<time> PKT all:bytes:dec_err:session:data:uniq:fec_rec:lost:bad:out:out_bytes`. With the ESP32 heard, `data` is about 150, `dec_err` 0 and `out` about 100. The video window stays empty, because the counter isn't video.
-   - or, to check every counter value: `sudo ./link.sh rx` in one terminal and `esp32/tools/counter_check.py` in another (rx.sh's video window would hold port 5600).
+   - `pc/rx.sh`: the `[rx]` lines show wfb_rx's stats every second, `<time> PKT all:bytes:dec_err:session:data:uniq:fec_rec:lost:bad:out:out_bytes`. With the ESP32 heard, `data` is about 150, `dec_err` 0 and `out` about 100. The video window stays empty, because the counter isn't video.
+   - or, to check every counter value: `sudo pc/link.sh rx` in one terminal and `esp32/tools/counter_check.py` in another (rx.sh's video window would hold port 5600).
 
 Keep the ESP32 a metre or more from the Ralink stick: at 20 dBm, centimetres can overload the receiver.
 

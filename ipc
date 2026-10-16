@@ -8,7 +8,7 @@ STATE=${XDG_STATE_HOME:-$HOME/.local/state}/open-ipc
 BASE_FILE=$STATE/base-address       # the base station's address, saved by "flash base"
 BOARDS_FILE=$STATE/boards           # which board was flashed in which USB socket, for "log"
 
-source ./wifi.sh                    # which WiFi adapter sends or receives, and which keys (shared with link.sh)
+source pc/wifi.sh                   # which WiFi adapter sends or receives, and which keys (shared with link.sh)
 
 usage() {
   cat <<'END'
@@ -234,19 +234,19 @@ receive() {
   say "$(key_status)"
   say "It asks for your password: the adapter is switched to monitor mode. Ctrl-C stops."
   if [[ -z $out ]]; then
-    RX_IF=$iface VIDEO=auto exec ./rx.sh
+    RX_IF=$iface VIDEO=auto exec pc/rx.sh
   fi
-  ./build.sh
+  pc/build-wfb-ng.sh
   sudo -v
   while sleep 60; do sudo -n -v; done &
   RECEIVE_KEEPALIVE=$!
   RECEIVE_LINK=""
   trap stop_receive EXIT
   trap 'exit 130' INT TERM
-  sudo env RX_IF="$iface" ./link.sh rx &
+  sudo env RX_IF="$iface" pc/link.sh rx &
   RECEIVE_LINK=$!
   sleep 2
-  ./burnin.sh "$out" || true
+  pc/burnin.sh "$out" || true
 }
 
 stop_receive() {
@@ -266,7 +266,7 @@ send() {
   fi
   say "$(key_status)"
   say "It asks for your password: the adapter is switched to monitor mode. On the other PC: ./ipc receive. Ctrl-C stops."
-  TX_IF=$iface SOURCE=$source exec ./tx.sh
+  TX_IF=$iface SOURCE=$source exec pc/tx.sh
 }
 
 # Your own key pair in keys/own/ (never committed, R9): the boards get it when flashed next, link.sh at once.
@@ -285,7 +285,7 @@ keys() {
       die "you already have your own keys in $own; ./ipc keys reset first to replace them"
     fi
   fi
-  [[ -x wfb-ng/wfb_keygen ]] || ./build.sh || die "wfb-ng isn't built: install what it lists above, then ./ipc keys again"
+  [[ -x wfb-ng/wfb_keygen ]] || pc/build-wfb-ng.sh || die "wfb-ng isn't built: install what it lists above, then ./ipc keys again"
   if [[ -t 0 ]]; then
     say "A password gives the same keys on every PC you type it on; none gives a random pair, which you copy."
     read -rsp "Password (Enter for random): " password
@@ -336,7 +336,7 @@ setup() {
   else
     say "  ffmpeg: missing, needed by ./ipc stream. Install the 'ffmpeg' package."
   fi
-  if ./build.sh >"$STATE/wfb-ng-build.log" 2>&1; then
+  if pc/build-wfb-ng.sh >"$STATE/wfb-ng-build.log" 2>&1; then
     say "  wfb-ng: built (the PC-to-PC radio link, tx.sh and rx.sh)"
   else
     say "  wfb-ng: not built; only the PC-to-PC radio link (tx.sh, rx.sh) needs it. To build it:"
@@ -377,7 +377,7 @@ case "${1:-} ${2:-}" in
     say "Camera $n from the base station ($addr), telemetry burned in. Ctrl-C stops."
     say "  (\"NO TELEMETRY\" on the video: the base station sends it to another PC, or this PC's firewall drops it;"
     say "   ./ipc flash base sets it up for this PC.)"
-    VIDEO_IN=rtsp://$addr:8554/cam$n TELEMETRY_PORT=$((5610 + n)) exec ./burnin.sh "${3:-}" ;;
+    VIDEO_IN=rtsp://$addr:8554/cam$n TELEMETRY_PORT=$((5610 + n)) exec pc/burnin.sh "${3:-}" ;;
   "receive "*) receive "${2:-}" ;;
   "send "*) send ;;
   "keys "*) keys "${2:-}" ;;

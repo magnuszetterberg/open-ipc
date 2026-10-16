@@ -57,6 +57,6 @@ wifi_in_use() {
 # repo's shared test keys. $1: drone.key (the sending end) or gs.key (the receiving end).
 key_file() {
   local dir
-  dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/keys
+  dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/keys
   if [[ -f $dir/own/$1 ]]; then echo "$dir/own/$1"; else echo "$dir/$1"; fi
 }

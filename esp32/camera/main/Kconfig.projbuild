@@ -71,7 +71,7 @@ menu "wfb-ng link"
         config LINK_PAYLOAD_VIDEO
             bool "Camera video (RTP/JPEG)"
             help
-                Play it on the receiver with VIDEO=jpeg ./rx.sh.
+                Play it with ./ipc receive (a PC's own WiFi adapter) or the base station.
 
         config LINK_PAYLOAD_COUNTER
             bool "Counter (link test)"

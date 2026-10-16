@@ -112,9 +112,9 @@ menu "Ethernet out"
         string "Send camera 0's video and every camera's telemetry to (IPv4 address)"
         default ""
         help
-            Camera 0's RTP/JPEG goes there as UDP (e.g. a PC running VIDEO=jpeg ./receiver.sh), and each
+            Camera 0's RTP/JPEG goes there as UDP (e.g. a PC running VIDEO=jpeg pc/receiver.sh), and each
             camera's telemetry, with the base station's signal quality added, goes to the telemetry port
-            + N (burnin.sh reads it). Empty: RTSP only.
+            + N (pc/burnin.sh reads it; ./ipc flash base sets this PC). Empty: RTSP only.
 
     config BASE_OUT_PORT
         int "Video UDP port"
