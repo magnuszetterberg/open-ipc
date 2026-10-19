@@ -20,9 +20,6 @@ CONFIG_ESP_WIFI_MGMT_SBUF_NUM=8
 CONFIG_LWIP_IPV6=n
 CONFIG_LWIP_DHCPS=n
 CONFIG_ETH_DMA_RX_BUFFER_NUM=6
-# A web viewer on WiFi (30 ms round trip) needs more than lwIP's default 5.7 KB in flight to keep up with
-# a camera: twice that, paid for by the RAM freed above. The web server stops sending when RAM runs low.
-CONFIG_LWIP_TCP_SND_BUF_DEFAULT=11520
 # CPU: the receive task decrypts and FEC-decodes every frame (~330 a second with a camera and the radar),
 # and at 160 MHz with -Og it fell behind and dropped frames. Full speed, and code built for speed.
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
