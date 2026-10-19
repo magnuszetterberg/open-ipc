@@ -51,7 +51,7 @@ Each one asks you to plug the board in, finds its USB port, flashes it, checks t
 | to a video server, telemetry burned in | `./ipc stream 0 rtmp://server/app/cam0` | `./ipc receive rtmp://server/app/cam0` |
 | record to a file instead | `./ipc stream 0 cam0.mkv` | `./ipc receive cam0.mkv` |
 
-With the base station, `./ipc flash base` sends the telemetry to the PC it runs on, offers to let it through that PC's firewall, and remembers the base station's address for `view` and `stream`. The base station has room for about three video streams at once in total: a browser showing three cameras, or a mix of browsers and streams.
+With the base station, `./ipc flash base` sends the telemetry to the PC it runs on, offers to let it through that PC's firewall, and remembers the base station's address for `view` and `stream`. If that address changes (a new DHCP lease), they look for the base station on the PC's own networks; on another network, give it with `BASE=<address>`. The base station has room for about three video streams at once in total: a browser showing three cameras, or a mix of browsers and streams.
 
 With this PC's adapter, `./ipc receive` picks an adapter that can receive and asks for your password (the adapter is switched to monitor mode). While it receives, the adapter can't be used for the network; if it's the PC's connection, it asks first. Ctrl-C gives it back.
 

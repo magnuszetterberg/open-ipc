@@ -105,19 +105,58 @@ boot_log() {
   timeout "$2" esp32/idf.sh python3 esp32/monitor.py "$1" 2>/dev/null | tr -d '\r' || true
 }
 
-# This PC's address on the LAN: where the base station should send telemetry.
-pc_address() {
-  ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1
+# This PC's own networks (address/prefix), whatever their range.
+lan_networks() {
+  ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}'
 }
 
+# This PC's address on the LAN: where the base station should send telemetry. The one it uses for the
+# internet, or with no internet its first network's.
+pc_address() {
+  { ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+'; lan_networks | cut -d/ -f1; } | head -1 || true
+}
+
+# Is a base station answering at this address? Its /status.json says so.
+is_base() {
+  curl -s --connect-timeout 1 -m 2 "http://$1/status.json" 2>/dev/null | grep -q '"uptime_s":.*"cams":'
+}
+
+# The base station on this PC's own networks: asks every address of each (up to 1024 per network) at once.
+find_base() {
+  lan_networks | python3 -c '
+import ipaddress, sys
+for net in sys.stdin.read().split():
+    n = ipaddress.ip_interface(net).network
+    if n.prefixlen >= 22:
+        print(*n.hosts(), sep="\n")' |
+    xargs -P 128 -I{} sh -c 'curl -s --connect-timeout 1 -m 2 http://{}/status.json | grep -q "\"uptime_s\":.*\"cams\":" && echo {}' |
+    head -1 || true
+}
+
+# The base station's address: BASE if given, else the one saved by "flash base" if it still answers there,
+# else found on this PC's networks (its DHCP address may have changed) and saved again.
 base_address() {
+  local addr
   if [[ -n ${BASE:-} ]]; then
+    is_base "$BASE" || say "No base station answers at $BASE; trying it anyway." >&2
     printf '%s\n' "$BASE"
-  elif [[ -s $BASE_FILE ]]; then
-    cat "$BASE_FILE"
-  else
-    die "I don't know the base station's address yet. Run ./ipc flash base, or give it: BASE=192.168.1.x ./ipc $*"
+    return
   fi
+  if [[ -s $BASE_FILE ]]; then
+    addr=$(<"$BASE_FILE")
+    if is_base "$addr"; then
+      printf '%s\n' "$addr"
+      return
+    fi
+    say "The base station doesn't answer at $addr any more; looking for it on this PC's networks..." >&2
+  else
+    say "Looking for the base station on this PC's networks..." >&2
+  fi
+  addr=$(find_base)
+  [[ -n $addr ]] || die "no base station answers on this PC's networks ($(lan_networks | tr '\n' ' ')). Is it powered, with its Ethernet cable in? On another network: BASE=<its address> ./ipc $words"
+  printf '%s\n' "$addr" >"$BASE_FILE"
+  say "  found it at $addr" >&2
+  printf '%s\n' "$addr"
 }
 
 flash_camera() {
@@ -142,9 +181,9 @@ flash_camera() {
 }
 
 flash_base() {
-  local port=$1 to log addr
+  local port=$1 to log addr via
   to=${SEND_TO:-$(pc_address)}
-  [[ -n $to ]] || die "can't tell this PC's LAN address; give it: SEND_TO=192.168.1.x ./ipc flash base"
+  [[ -n $to ]] || die "this PC has no network address; give the one to send telemetry to: SEND_TO=<address> ./ipc flash base"
   [[ -n $port ]] || port=$(wait_for_new_port "the base station (ESP32-POE)")
 
   # Telemetry (and camera 0's video for receiver.sh) goes to this PC: a build-time setting (menuconfig, R8)
@@ -167,6 +206,11 @@ flash_base() {
   fi
   printf '%s\n' "$addr" >"$BASE_FILE"
   say "Done: the base station is at $addr."
+  via=$(ip -4 route get "$addr" 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1 || true)
+  if [[ -n $via && $via != "$to" ]]; then
+    say "  Note: telemetry goes to $to, but this PC reaches the base station as $via. If that's wrong:"
+    say "    SEND_TO=$via ./ipc flash base"
+  fi
   say "  web page:  http://$addr/          (./ipc view)"
   say "  RTSP:      rtsp://$addr:8554/cam0 ... cam2"
   say "  telemetry: to this PC ($to), UDP 5610-5612"
@@ -464,10 +508,13 @@ setup() {
   say "Ready. Next: ./ipc flash camera 0 (or ./ipc flash base)."
 }
 
+# Opens the page in this PC's browser when it has a desktop; the address works from any device on the network.
 open_url() {
   say "$1"
-  if command -v xdg-open >/dev/null; then
+  if [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]] && command -v xdg-open >/dev/null; then
     xdg-open "$1" >/dev/null 2>&1 || true
+  else
+    say "  (no desktop here: open it in a browser on any device on the same network)"
   fi
 }
 
@@ -486,15 +533,30 @@ done
 set -- "${args[@]}"
 mkdir -p "$STATE"
 
-case "${1:-} ${2:-}" in
-  "flash camera") flash_camera "${3:-}" "$port" ;;
-  "flash base") flash_base "$port" ;;
-  "flash radar") flash_radar "${3:-2}" "$port" ;;
-  "view "*) addr=$(base_address view); open_url "http://$addr/" ;;
-  "stream "*)
+words="$*"
+# Words I don't know are refused, not ignored: "./ipc view something" must not quietly do "./ipc view".
+unknown() {
+  usage >&2
+  die "I don't know \"./ipc $words\"; what I can do is listed above."
+}
+
+case "${1:-}" in
+  flash)
+    case "${2:-} $#" in
+      "camera 2"|"camera 3") flash_camera "${3:-}" "$port" ;;
+      "base 2") flash_base "$port" ;;
+      "radar 2"|"radar 3") flash_radar "${3:-2}" "$port" ;;
+      *) unknown ;;
+    esac ;;
+  view)
+    (($# == 1)) || unknown
+    addr=$(base_address)
+    open_url "http://$addr/" ;;
+  stream)
+    (($# <= 3)) || unknown
     n=${2:-}
     [[ $n =~ ^[012]$ ]] || die "which camera? ./ipc stream 0 rtmp://server/app/cam0"
-    addr=$(base_address stream "$n")
+    addr=$(base_address)
     say "Camera $n from the base station ($addr), telemetry burned in. Ctrl-C stops."
     say "  (\"NO TELEMETRY\" on the video: the base station sends it to another PC, or this PC's firewall drops it;"
     say "   ./ipc flash base sets it up for this PC.)"
@@ -503,14 +565,23 @@ case "${1:-} ${2:-}" in
       export RADAR=$radar RADAR_IN=rtsp://$addr:8554/cam$radar
     fi
     VIDEO_IN=rtsp://$addr:8554/cam$n TELEMETRY_PORT=$((5610 + n)) exec pc/burnin.sh "${3:-}" ;;
-  "receive "*) receive "${2:-}" "${3:-}" ;;
-  "send "*) send ;;
-  "keys "*) keys "${2:-}" ;;
-  "test "*) run_tests ;;
-  "wfb-ng "*) wfb_ng "${2:-}" ;;
-  "log "*) [[ -n $port ]] || port=$(pick_port); exec esp32/monitor.sh "$port" -t ;;
-  "setup radar") esp32/zephyr-setup.sh ;;
-  "setup "*) setup ;;
-  " ") usage ;;
-  *) usage; exit 1 ;;
+  receive) (($# <= 3)) || unknown; receive "${2:-}" "${3:-}" ;;
+  send) (($# == 1)) || unknown; send ;;
+  keys) (($# == 1)) || [[ $# == 2 && $2 == reset ]] || unknown; keys "${2:-}" ;;
+  test) (($# == 1)) || unknown; run_tests ;;
+  wfb-ng) (($# == 1)) || [[ $# == 2 && $2 =~ ^(check|update)$ ]] || unknown; wfb_ng "${2:-}" ;;
+  log)
+    (($# == 1)) || unknown
+    [[ -n $port ]] || port=$(pick_port)
+    exec esp32/monitor.sh "$port" -t ;;
+  setup)
+    if (($# == 1)); then
+      setup
+    elif [[ $# == 2 && $2 == radar ]]; then
+      esp32/zephyr-setup.sh
+    else
+      unknown
+    fi ;;
+  "") usage ;;
+  *) unknown ;;
 esac
