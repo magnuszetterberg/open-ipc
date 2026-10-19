@@ -29,7 +29,8 @@ struct web_client
     size_t out_len = 0;
     const char *body = nullptr;   // the page, sent from where it lives once out is empty
     size_t body_left = 0;
-    int stream = -1;              // an MJPEG viewer of this stream
+    int stream = -1;              // a viewer of this stream: MJPEG, or its data
+    bool data = false;            // its data, not MJPEG
     bool in_jpeg = false;         // in the middle of a JPEG: the next piece belongs to it
     bool closing = false;         // close once everything is sent
 };
@@ -224,7 +225,8 @@ void web_server::handle_request(web_client &c)
     for (int i = 0; i < streams; i++)
     {
         size_t n = strlen(names[i]);
-        if (path[0] == '/' && strncmp(path + 1, names[i], n) == 0 && strcmp(path + 1 + n, ".mjpg") == 0)
+        bool mjpeg = strcmp(path + 1 + n, ".mjpg") == 0, data = strcmp(path + 1 + n, ".data") == 0;
+        if (path[0] == '/' && strncmp(path + 1, names[i], n) == 0 && (mjpeg || data))
         {
             // The last connection is kept for the page and its status requests: with every one taken by
             // video, the page could no longer tell what it shows (and a browser's forgotten streams stay)
@@ -242,8 +244,18 @@ void web_server::handle_request(web_client &c)
             }
             static const char head[] = "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=frame\r\n"
                                        "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
-            append(c, head, sizeof(head) - 1);
+            static const char data_head[] = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"
+                                            "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
+            if (data)
+            {
+                append(c, data_head, sizeof(data_head) - 1);
+            }
+            else
+            {
+                append(c, head, sizeof(head) - 1);
+            }
             c.stream = i;
+            c.data = data;
             return;
         }
     }
@@ -352,7 +364,7 @@ void web_server::jpeg_begin(int stream)
     for (int i = 0; clients != nullptr && i < config.max_clients; i++)
     {
         web_client &c = clients[i];
-        if (c.fd < 0 || c.stream != stream)
+        if (c.fd < 0 || c.stream != stream || c.data)
         {
             continue;
         }
@@ -410,6 +422,37 @@ void web_server::jpeg_end(int stream, bool complete)
         {
             jpegs_cut++;
         }
+    }
+}
+
+void web_server::data(int stream, const uint8_t *payload, size_t size)
+{
+    if (size > 0xffff)
+    {
+        return;
+    }
+    const uint8_t length[2] = {(uint8_t)size, (uint8_t)(size >> 8)};
+    for (int i = 0; clients != nullptr && i < config.max_clients; i++)
+    {
+        web_client &c = clients[i];
+        if (c.fd < 0 || c.stream != stream || !c.data)
+        {
+            continue;
+        }
+        // All of it or none: the length and the payload together
+        if (c.out_len + 2 + size > config.client_buffer)
+        {
+            flush(c);
+        }
+        if (c.fd < 0 || c.out_len + 2 + size > config.client_buffer)
+        {
+            data_skipped++;
+            continue;
+        }
+        append(c, length, 2);
+        append(c, payload, size);
+        data_sent++;
+        flush(c);
     }
 }
 

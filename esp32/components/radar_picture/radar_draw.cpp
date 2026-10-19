@@ -161,7 +161,7 @@ int trace_y(float m)
 }
 }  // namespace
 
-void radar_picture::add(const radar_detector &d)
+void radar_picture::add(const radar_data &d)
 {
     if (history_count < HISTORY)
     {
@@ -174,7 +174,7 @@ void radar_picture::add(const radar_detector &d)
     }
 }
 
-void radar_picture::draw(const radar_detector &d)
+void radar_picture::draw(const radar_data &d)
 {
     canvas c{*this};
     c.rect(0, 0, W, H, BACKGROUND);

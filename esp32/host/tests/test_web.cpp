@@ -409,5 +409,66 @@ int main()
         printf("may_send: held while it said no, sent once it said yes\n");
         close(fd);
     }
+
+    // A stream's data (the radar's, M9): each payload with its length, in order; one too big for the
+    // viewer's buffer skipped whole; the stream's JPEGs never mixed in
+    {
+        web_server srv;
+        web_config cfg;
+        cfg.port = free_tcp_port();
+        cfg.max_clients = 3;
+        cfg.client_buffer = 2048;
+        CHECK(srv.start(cfg, names, 3));
+        int fd = connect_to(cfg.port, "GET /cam2.data HTTP/1.1\r\n\r\n");
+        for (uint64_t end = now_us() + 1000000; now_us() < end && srv.viewers(2) == 0;)
+        {
+            srv.poll(5);
+        }
+        CHECK(srv.viewers(2) == 1 && srv.viewers(0) == 0);
+        std::string got;
+        std::vector<std::string> sent;
+        for (int i = 0; i < 200; i++)
+        {
+            std::string payload(i == 50 ? 3000 : 16 + 2 * 54, 'a' + i % 26);
+            payload[0] = 'D';
+            payload[2] = (char)i;
+            srv.data(2, (const uint8_t *)payload.data(), payload.size());
+            if (i == 50)
+            {
+                srv.jpeg_begin(2);   // video on the same stream: not for a data viewer
+                srv.jpeg_data(2, (const uint8_t *)"\xff\xd8jpeg", 6);
+                srv.jpeg_end(2, true);
+            }
+            else
+            {
+                sent.push_back(payload);
+            }
+            srv.poll(1);
+            read_some(fd, &got);
+        }
+        for (uint64_t end = now_us() + 300000; now_us() < end;)
+        {
+            srv.poll(5);
+            read_some(fd, &got);
+        }
+        size_t at = got.find("\r\n\r\n");
+        CHECK(got.rfind("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n", 0) == 0 && at != std::string::npos);
+        std::vector<std::string> records;
+        for (at += 4; at + 2 <= got.size();)
+        {
+            size_t size = (uint8_t)got[at] | (uint8_t)got[at + 1] << 8;
+            if (at + 2 + size > got.size())
+            {
+                break;
+            }
+            records.push_back(got.substr(at + 2, size));
+            at += 2 + size;
+        }
+        printf("data: %zu of %zu payloads arrived whole and in order, %u skipped (too big)\n", records.size(),
+               sent.size(), (unsigned)srv.data_skipped);
+        CHECK(records == sent && at == got.size());
+        CHECK(srv.data_skipped == 1 && srv.data_sent == sent.size() && srv.jpegs_sent == 0);
+        close(fd);
+    }
     return check_result("test_web");
 }

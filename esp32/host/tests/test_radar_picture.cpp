@@ -1,6 +1,6 @@
 // radar_picture: the detection on the real radar's recorded measurements and on a simulated moving
-// person, and the picture's JPEG: rtp_jpeg carries it unchanged, and GStreamer's jpegdec (what receiver.sh
-// uses) decodes it. The last picture is written to radar_picture.jpg in the build folder, to look at.
+// person; what it finds as a "D1" payload and back; and the picture drawn from that, as JPEG: rtp_jpeg
+// carries it unchanged, and GStreamer's jpegdec (what receiver.sh uses) decodes it. The last picture is written to radar_picture.jpg in the build folder, to look at.
 #include <math.h>
 #include <signal.h>
 #include <stdint.h>
@@ -112,7 +112,7 @@ int main()
         {
             std::vector<uint8_t> p = measurement(tap, i);
             sim.add_r1(p.data(), p.size());
-            picture.add(sim);
+            picture.add(radar_data_of(sim));
         }
         float want = (tap - 6) * radar_detector::TAP_M;
         printf("simulated person at %.2f m: found %s at %.2f m\n", (double)want, sim.finding.moving ? "moving" : "nothing",
@@ -120,8 +120,47 @@ int main()
         CHECK(sim.finding.moving && fabsf(sim.finding.distance_m - want) < 0.3f);
     }
 
+    // What it finds, as the radar camera sends it: the taps from 0 to 8 m, and back as it was, to 0.05 dB
+    radar_data data = radar_data_of(sim);
+    CHECK(data.antennas == 2 && data.taps == 54);
+    CHECK(data.movement[0][15] == sim.movement[0][6 + 15]);
+    static uint8_t payload[RADAR_DATA_MAX];
+    size_t size = radar_data_pack(data, 1234, payload, sizeof(payload));
+    CHECK(size == 16 + 2 * 54);
+    CHECK(radar_data_pack(data, 1234, payload, size - 1) == 0);
+    radar_data back;
+    uint16_t seq = 0;
+    CHECK(radar_data_unpack(payload, size, &back, &seq) && seq == 1234);
+    CHECK(back.antennas == 2 && back.taps == 54 && back.measurements == sim.measurements);
+    CHECK(back.finding.moving == sim.finding.moving && back.finding.learning == sim.finding.learning);
+    CHECK(fabsf(back.finding.distance_m - sim.finding.distance_m) <= 0.005f);
+    float worst = 0;
+    for (int a = 0; a < 2; a++)
+    {
+        for (int k = 0; k < 54; k++)
+        {
+            worst = std::max(worst, fabsf(back.movement[a][k] - std::min(data.movement[a][k], 25.5f)));
+        }
+    }
+    printf("radar data: %zu bytes a measurement, movement back to within %.3f dB\n", size, (double)worst);
+    CHECK(worst <= 0.05f);
+    CHECK(!radar_data_unpack(payload, size - 1, &back));
+    CHECK(!radar_data_unpack(rec[0].data(), rec[0].size(), &back));   // an "R1" isn't one
+
+    // The picture drawn from what came over the link: as from the detector's own, but for rounding
+    static radar_picture direct;
+    direct = picture;
+    direct.draw(data);
+    picture.draw(back);
+    int differ = 0;
+    for (int k = 0; k < radar_picture::WIDTH * radar_picture::HEIGHT; k++)
+    {
+        differ += direct.y[k] != picture.y[k];
+    }
+    printf("picture from the payload: %d pixels differ from the detector's own\n", differ);
+    CHECK(differ < 200);
+
     // The picture, as JPEG: a few KB, carried unchanged by rtp_jpeg, decodable
-    picture.draw(sim);
     size_t n = jpeg_encode_422(picture.y, picture.cb, picture.cr, radar_picture::WIDTH, radar_picture::HEIGHT, 80,
                                jpeg, sizeof(jpeg));
     printf("picture: %zu bytes of JPEG\n", n);

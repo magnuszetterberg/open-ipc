@@ -26,36 +26,44 @@ menu "wfb-ng link"
     config LINK_RADIO_PORT
         int "Radio port (camera number)"
         range 0 15
-        default 2 if LINK_PAYLOAD_RADAR_PICTURE
+        default 2 if LINK_PAYLOAD_RADAR_DATA || LINK_PAYLOAD_RADAR_PICTURE
         default 0
         help
-            Camera N's video port; its telemetry goes on 0x10 + N. The radar picture is camera 2 by default,
-            next to ESP32-CAMs 0 and 1 on the base station. link.sh's wfb_rx listens on port 0.
+            Camera N's video port; its telemetry goes on 0x10 + N. The radar is camera 2 by default, next to
+            ESP32-CAMs 0 and 1 on the base station. The raw measurements go to port 0, where
+            pc/radar_view.py listens.
 
     config LINK_FEC_K
         int "FEC k (data packets per block)"
         range 1 32
-        default 1 if LINK_PAYLOAD_RADAR_RAW
+        default 1 if LINK_PAYLOAD_RADAR_DATA || LINK_PAYLOAD_RADAR_RAW
         default 8
         help
-            The raw radar data is one small packet per measurement: k = 1 sends each at once, as telemetry
+            The radar's data is one small packet per measurement: k = 1 sends each at once, as telemetry
             does. Pictures use the cameras' 8/12.
 
     config LINK_FEC_N
         int "FEC n (data + FEC packets per block)"
         range 1 32
-        default 2 if LINK_PAYLOAD_RADAR_RAW
+        default 2 if LINK_PAYLOAD_RADAR_DATA || LINK_PAYLOAD_RADAR_RAW
         default 12
 
     choice LINK_PAYLOAD
         prompt "What to send"
-        default LINK_PAYLOAD_RADAR_PICTURE
+        default LINK_PAYLOAD_RADAR_DATA
+
+        config LINK_PAYLOAD_RADAR_DATA
+            bool "What the radar finds, per measurement (and the finding as telemetry)"
+            help
+                Per measurement, 20 a second: the finding and the movement against distance, as a "D1"
+                payload of ~124 bytes (radar_picture.hpp). The web page draws it; on a PC, radar_render
+                draws it as video for ./ipc receive and the burn-in script (docs/DESIGN.md, M9).
 
         config LINK_PAYLOAD_RADAR_PICTURE
             bool "The radar picture (RTP/JPEG video, and the finding as telemetry)"
             help
-                What the SR250 finds, drawn as camera N's video: the base station, ./ipc receive and the
-                burn-in script show it as they show a camera.
+                What the SR250 finds, drawn here as camera N's video, for receivers that only play video:
+                ~1.2 Mbit/s on air at 10 pictures a second, where the data is ~40 kbit/s.
 
         config LINK_PAYLOAD_RADAR_RAW
             bool "The radar's raw measurements (R1, for pc/radar_view.py)"
@@ -71,11 +79,12 @@ menu "wfb-ng link"
         int "Measurements per picture"
         depends on LINK_PAYLOAD_RADAR_PICTURE
         range 1 20
-        default 8
+        default 4
         help
-            The radar measures 20 times a second: 8 makes 2.5 pictures a second. Every measurement still
-            counts for the finding and the trace. Each picture is ~20 packets of the RW612's ~470 bytes:
-            at 5 a second, next to a camera, the base station's receive queue overflowed.
+            The radar measures 20 times a second: 4 makes 5 pictures a second, 2 makes 10. Every
+            measurement still counts for the finding and the trace. Drawing and encoding a picture takes
+            ~35 ms, and each is ~10 KB, ~9 packets: 10 a second is ~1.2 Mbit/s on air with FEC. At 5 a
+            second next to a camera, the base station's receive queue once overflowed: test it there.
 
     config RADAR_PACKET_GAP_MS
         int "Gap between a picture's packets (ms)"
@@ -83,8 +92,10 @@ menu "wfb-ng link"
         range 0 50
         default 15
         help
-            A picture's ~8 packets go out this far apart, ~120 ms in all, not in one burst: the base
-            station passes each picture to its web viewers as it arrives, with room for ~8 KB per viewer.
+            A picture's ~9 packets go out this far apart, ~135 ms in all, not in one burst: the base
+            station passes each picture to its web viewers as it arrives, with little room per viewer.
+            The next picture waits until the last packet is out, so 9 x this plus ~35 ms has to stay
+            under the time between pictures (3 ms for 10 a second).
 
     config RADAR_JPEG_QUALITY
         int "Picture JPEG quality"

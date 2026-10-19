@@ -1,7 +1,9 @@
 // Radar camera firmware for the FRDM-RW612 (app layer, R4). Kconfig "What to send":
-//   - the radar picture (M9): what the SR250 finds, drawn and sent as camera N's RTP/JPEG video, and the
-//     finding as camera N's telemetry, so the base station, ./ipc receive and the burn-in script show it
-//     as they show a camera;
+//   - the radar's data (M9): per measurement, what the SR250 finds (a "D1" payload, radar_picture.hpp) on
+//     camera N's video port, and the finding as camera N's telemetry; the web page draws it, and on a PC
+//     radar_render draws it as video;
+//   - the radar picture: the same drawn here and sent as camera N's RTP/JPEG video, for receivers that
+//     only play video;
 //   - the radar's raw measurements, one "R1" payload each (pc/radar_view.py);
 //   - a numbered counter, to test the link itself (M8).
 #include <stdio.h>
@@ -53,12 +55,13 @@ struct stream
 static const uint32_t VIDEO_ID = ((uint32_t)CONFIG_LINK_ID << 8) + CONFIG_LINK_RADIO_PORT;
 static stream video(VIDEO_ID);
 
-#if CONFIG_LINK_PAYLOAD_RADAR_PICTURE || CONFIG_LINK_PAYLOAD_RADAR_RAW
+#if CONFIG_LINK_PAYLOAD_RADAR_DATA || CONFIG_LINK_PAYLOAD_RADAR_PICTURE || CONFIG_LINK_PAYLOAD_RADAR_RAW
 
 static const uint32_t TELEMETRY_ID = ((uint32_t)CONFIG_LINK_ID << 8) + 0x10 + CONFIG_LINK_RADIO_PORT;
 static stream telemetry(TELEMETRY_ID);
 static radar_detector detector;
 
+#if CONFIG_LINK_PAYLOAD_RADAR_PICTURE
 // A picture's RTP packets, each to become one wfb-ng payload, queued and sent CONFIG_RADAR_PACKET_GAP_MS apart
 // rather than in one burst: the base station streams each picture to its web viewers as it arrives, with
 // room for about 8 KB per viewer, and a picture arriving within a few milliseconds outran that and was cut.
@@ -108,8 +111,10 @@ struct paced_sink : rtp_jpeg_sink
         }
     }
 };
+#endif
 
 // The finding as one JSON object (docs/DESIGN.md: Telemetry); the base station adds its signal quality
+// fps and frame_kb: the payloads sent per second (pictures, or measurements) and their size
 static void send_telemetry(uint32_t seq, uint32_t pictures_s, uint32_t picture_bytes)
 {
     char msg[256];
@@ -141,6 +146,9 @@ static void radar_loop()
     uint32_t telemetry_seq = 0, pictures = 0, picture_bytes = 0, pictures_s = 0, picture_kb_s = 0;
     uint32_t sent = 0, unreadable = 0, send_errors = 0, too_big = 0, encode_us = 0;
     bool was_moving = false;
+#if CONFIG_LINK_PAYLOAD_RADAR_PICTURE
+    int since_picture = 0;
+#endif
 
     for (;;)
     {
@@ -168,12 +176,29 @@ static void radar_loop()
             {
                 send_errors += 1;
             }
-#else
-            picture.add(detector);
-            if (detector.measurements % CONFIG_RADAR_PICTURE_EVERY == 0 && !sink.pending())
+#elif CONFIG_LINK_PAYLOAD_RADAR_DATA
+            static uint8_t data[RADAR_DATA_MAX];
+            size_t size = radar_data_pack(radar_data_of(detector), (uint16_t)(seq - 1), data, sizeof(data));
+            if (size > 0 && size <= video.tx.max_payload() && video.tx.send(data, size, now_us()) == WFB_OK)
             {
+                sent += 1;
+                pictures += 1;   // for telemetry's fps and frame_kb: measurements sent, and their size
+                picture_bytes += size;
+            }
+            else
+            {
+                send_errors += 1;
+            }
+#else
+            radar_data now = radar_data_of(detector);
+            picture.add(now);
+            // A picture every CONFIG_RADAR_PICTURE_EVERY measurements; one that comes due while the last one's
+            // packets are still going out waits for them, rather than being skipped
+            if (++since_picture >= CONFIG_RADAR_PICTURE_EVERY && !sink.pending())
+            {
+                since_picture = 0;
                 uint64_t t0 = now_us();
-                picture.draw(detector);
+                picture.draw(now);
                 size_t size = jpeg_encode_422(picture.y, picture.cb, picture.cr, radar_picture::WIDTH,
                                               radar_picture::HEIGHT, CONFIG_RADAR_JPEG_QUALITY, jpeg, sizeof(jpeg));
                 encode_us = (uint32_t)(now_us() - t0);
@@ -212,17 +237,21 @@ static void radar_loop()
             printk("radar: %lu measurements/s, %lu sent (%s), %lu frames on air, %lu unreadable, %lu send errors, "
                    "%lu too big; %s",
                    (unsigned long)(radar_counts.notifications - last_counts.notifications), (unsigned long)sent,
-                   IS_ENABLED(CONFIG_LINK_PAYLOAD_RADAR_RAW) ? "measurements" : "pictures", (unsigned long)video.radio.frames,
+                   IS_ENABLED(CONFIG_LINK_PAYLOAD_RADAR_PICTURE) ? "pictures" : "measurements", (unsigned long)video.radio.frames,
                    (unsigned long)unreadable, (unsigned long)send_errors, (unsigned long)too_big,
                    detector.finding.learning ? "learning" : detector.finding.moving ? "moving" : "nothing moving");
             if (detector.finding.moving)
             {
                 printk(" at %.2f m", (double)detector.finding.distance_m);
             }
-            if (pictures)
+            if (pictures && IS_ENABLED(CONFIG_LINK_PAYLOAD_RADAR_PICTURE))
             {
                 printk("; %lu bytes/picture, drawn and encoded in %lu ms", (unsigned long)(picture_bytes / pictures),
                        (unsigned long)(encode_us / 1000));
+            }
+            else if (pictures)
+            {
+                printk("; %lu bytes each", (unsigned long)(picture_bytes / pictures));
             }
             printk("\n");
             last_counts = radar_counts;
@@ -301,7 +330,7 @@ int main(void)
 {
     printk("radar camera, FRDM-RW612, Zephyr %s\n", KERNEL_VERSION_STRING);
 
-#if CONFIG_LINK_PAYLOAD_RADAR_PICTURE || CONFIG_LINK_PAYLOAD_RADAR_RAW
+#if CONFIG_LINK_PAYLOAD_RADAR_DATA || CONFIG_LINK_PAYLOAD_RADAR_PICTURE || CONFIG_LINK_PAYLOAD_RADAR_RAW
     // The SR250 first, before WiFi starts
     if (radar_start() != 0)
     {
@@ -320,7 +349,7 @@ int main(void)
     printk("wfb-ng link 0x%06x port %d, FEC %d/%d, max payload %u\n", CONFIG_LINK_ID, CONFIG_LINK_RADIO_PORT,
            CONFIG_LINK_FEC_K, CONFIG_LINK_FEC_N, (unsigned)video.tx.max_payload());
 
-#if CONFIG_LINK_PAYLOAD_RADAR_PICTURE || CONFIG_LINK_PAYLOAD_RADAR_RAW
+#if CONFIG_LINK_PAYLOAD_RADAR_DATA || CONFIG_LINK_PAYLOAD_RADAR_PICTURE || CONFIG_LINK_PAYLOAD_RADAR_RAW
     // Telemetry: its own stream (radio port 0x10 + N, FEC 1/2), as the cameras send theirs
     if (telemetry.start(TELEMETRY_ID, 1, 2))
     {

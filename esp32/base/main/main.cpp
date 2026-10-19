@@ -61,7 +61,9 @@ struct web_sink : jpeg_stream_sink
     }
 };
 
-// Recovered video: RTP/JPEG to the camera's RTSP clients and web viewers (and camera 0's to video_out).
+// Recovered video: RTP/JPEG to the camera's RTSP clients and web viewers (and camera 0's to video_out). A
+// payload that isn't RTP is the camera's data (the radar's, M9): to its web viewers as it is, for the page
+// to draw.
 struct video_sink : wfb_payload_sink
 {
     int index = 0;
@@ -71,7 +73,20 @@ struct video_sink : wfb_payload_sink
     {
         packets += 1;
         bytes += size;
-        frames += (size >= 12 && (buf[1] & 0x80)) ? 1 : 0;  // the RTP marker ends a frame
+        if (index == 0 && video_out != nullptr)
+        {
+            video_out->send_payload(buf, size);
+        }
+        if (size < 12 || (buf[0] & 0xc0) != 0x80)  // not RTP version 2
+        {
+            frames += 1;  // each payload is one
+            if (web_up && web.viewers(index) > 0)
+            {
+                web.data(index, buf, size);
+            }
+            return;
+        }
+        frames += (buf[1] & 0x80) ? 1 : 0;  // the RTP marker ends a frame
         if (rtsp_up)
         {
             rtsp.send_rtp(index, buf, size);
@@ -79,10 +94,6 @@ struct video_sink : wfb_payload_sink
         if (web_up && web.viewers(index) > 0)
         {
             streamer->push(buf, size);  // a viewer joining mid-frame starts with the next one
-        }
-        if (index == 0 && video_out != nullptr)
-        {
-            video_out->send_payload(buf, size);
         }
     }
 };
@@ -270,7 +281,7 @@ static void update_status(const uint32_t *video_frames)
 static void report(radio_rx *radio)
 {
     static uint32_t last_heard = 0, last_overflow = 0, last_rtsp_sent = 0, last_rtsp_dropped = 0;
-    static uint32_t last_web_sent = 0, last_web_cut = 0, last_web_skipped = 0;
+    static uint32_t last_web_sent = 0, last_web_cut = 0, last_web_skipped = 0, last_data_sent = 0, last_data_skipped = 0;
     uint32_t video_frames[CONFIG_BASE_CAMERAS];
     for (int i = 0; i < CONFIG_BASE_CAMERAS; i++)
     {
@@ -312,11 +323,12 @@ static void report(radio_rx *radio)
     }
     uint32_t heard = radio->heard, overflow = radio->overflow;
     ESP_LOGI(TAG, "radio: %lu data frames heard, %lu dropped (slots full) | rtsp: %lu sent, %lu dropped | "
-                  "web: %lu JPEGs sent, %lu cut, %lu skipped, %lu refused | ethernet link drops %lu | RAM free %u (lowest %u)",
+                  "web: %lu JPEGs sent, %lu cut, %lu skipped, %lu data sent, %lu skipped, %lu refused | ethernet link drops %lu | RAM free %u (lowest %u)",
              (unsigned long)(heard - last_heard), (unsigned long)(overflow - last_overflow),
              (unsigned long)(rtsp.sent - last_rtsp_sent), (unsigned long)(rtsp.dropped - last_rtsp_dropped),
              (unsigned long)(web.jpegs_sent - last_web_sent), (unsigned long)(web.jpegs_cut - last_web_cut),
-             (unsigned long)(web.jpegs_skipped - last_web_skipped), (unsigned long)web.refused,
+             (unsigned long)(web.jpegs_skipped - last_web_skipped), (unsigned long)(web.data_sent - last_data_sent),
+             (unsigned long)(web.data_skipped - last_data_skipped), (unsigned long)web.refused,
              (unsigned long)eth_link_drops(), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     // "lowest" covers the second since the last report: viewers' TCP data lives on the heap for moments only
@@ -325,6 +337,8 @@ static void report(radio_rx *radio)
     last_web_sent = web.jpegs_sent;
     last_web_cut = web.jpegs_cut;
     last_web_skipped = web.jpegs_skipped;
+    last_data_sent = web.data_sent;
+    last_data_skipped = web.data_skipped;
     last_heard = heard;
     last_overflow = overflow;
     last_rtsp_sent = rtsp.sent;

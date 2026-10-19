@@ -3,7 +3,6 @@
 // The JPEG standard (ITU T.81): 8x8 DCT, quantization, zigzag, and Huffman coding with the standard tables
 // (Annex K), in MCUs of two luma blocks and one block each of Cb and Cr (Y sampled 2x1). The headers are
 // rtp_jpeg's own (jpeg_headers), so the file is exactly what RFC 2435 type 0 describes.
-#include <math.h>
 #include <string.h>
 
 #include "jpeg_tables.hpp"
@@ -91,31 +90,47 @@ struct bit_writer
     }
 };
 
-// cos((2x + 1) u pi / 16), with C(0) = 1/sqrt(2), and the 1/2 of the 1D DCT
-float dct_table[8][8];
+// The AAN DCT's output scale: coefficient (u, v) comes out 8 x AAN_SCALE[u] x AAN_SCALE[v] times the JPEG
+// standard's, which the quantization takes out again (libjpeg's jfdctflt.c and its float quantization)
+const float AAN_SCALE[8] = {1.0f, 1.387039845f, 1.306562965f, 1.175875602f,
+                            1.0f, 0.785694958f, 0.541196100f, 0.275899379f};
 
-void init_dct()
+// One 8-point DCT, Arai, Agui and Nakajima's (as libjpeg's jfdctflt.c): 5 multiplications instead of 64.
+// d[0], d[step], ... d[7 * step], in place; the output scaled by 8 x AAN_SCALE (see above).
+inline void aan_dct(float *d, int step)
 {
-    static bool done = false;
-    if (done)
-    {
-        return;
-    }
-    for (int u = 0; u < 8; u++)
-    {
-        for (int x = 0; x < 8; x++)
-        {
-            dct_table[u][x] = 0.5f * (u == 0 ? 0.70710678f : 1.0f) * cosf((2 * x + 1) * u * 3.14159265f / 16);
-        }
-    }
-    done = true;
+    float t0 = d[0] + d[7 * step], t7 = d[0] - d[7 * step];
+    float t1 = d[step] + d[6 * step], t6 = d[step] - d[6 * step];
+    float t2 = d[2 * step] + d[5 * step], t5 = d[2 * step] - d[5 * step];
+    float t3 = d[3 * step] + d[4 * step], t4 = d[3 * step] - d[4 * step];
+    // Even part
+    float t10 = t0 + t3, t13 = t0 - t3, t11 = t1 + t2, t12 = t1 - t2;
+    d[0] = t10 + t11;
+    d[4 * step] = t10 - t11;
+    float z1 = (t12 + t13) * 0.707106781f;
+    d[2 * step] = t13 + z1;
+    d[6 * step] = t13 - z1;
+    // Odd part
+    t10 = t4 + t5;
+    t11 = t5 + t6;
+    t12 = t6 + t7;
+    float z5 = (t10 - t12) * 0.382683433f;
+    float z2 = 0.541196100f * t10 + z5;
+    float z4 = 1.306562965f * t12 + z5;
+    float z3 = t11 * 0.707106781f;
+    float z11 = t7 + z3, z13 = t7 - z3;
+    d[5 * step] = z13 + z2;
+    d[3 * step] = z13 - z2;
+    d[step] = z11 + z4;
+    d[7 * step] = z11 - z4;
 }
 
 // One 8x8 block: level shift, DCT, quantization, zigzag, Huffman. pred: the component's previous DC.
-void encode_block(bit_writer &w, const uint8_t *plane, int stride, int x0, int y0, const float *divisors,
+// scales: per coefficient, 1 / (its quantizer x the AAN DCT's scale), natural order.
+void encode_block(bit_writer &w, const uint8_t *plane, int stride, int x0, int y0, const float *scales,
                   const huffman &dc, const huffman &ac, int *pred)
 {
-    float in[8][8], tmp[8][8];
+    float d[64];
     int q[64];
     // Most of a drawn picture is flat: a block of one value has only its DC coefficient (8 x the value)
     const uint8_t first = plane[y0 * stride + x0];
@@ -131,43 +146,32 @@ void encode_block(bit_writer &w, const uint8_t *plane, int stride, int x0, int y
     if (flat)
     {
         memset(q, 0, sizeof(q));
-        float dc = 8.0f * (first - 128.0f) / divisors[0];
+        float dc = 64.0f * (first - 128.0f) * scales[0];   // the AAN DCT's DC: the sum of the 64 values
         q[0] = (int)(dc < 0 ? dc - 0.5f : dc + 0.5f);
     }
     else
     {
-    for (int yy = 0; yy < 8; yy++)
-    {
-        for (int x = 0; x < 8; x++)
+        for (int yy = 0; yy < 8; yy++)
         {
-            in[yy][x] = plane[(y0 + yy) * stride + x0 + x] - 128.0f;
-        }
-    }
-    for (int yy = 0; yy < 8; yy++)   // rows
-    {
-        for (int u = 0; u < 8; u++)
-        {
-            float s = 0;
+            const uint8_t *row = plane + (y0 + yy) * stride + x0;
             for (int x = 0; x < 8; x++)
             {
-                s += dct_table[u][x] * in[yy][x];
+                d[yy * 8 + x] = row[x] - 128.0f;
             }
-            tmp[yy][u] = s;
         }
-    }
-    for (int u = 0; u < 8; u++)   // columns, then quantization
-    {
-        for (int v = 0; v < 8; v++)
+        for (int i = 0; i < 8; i++)
         {
-            float s = 0;
-            for (int yy = 0; yy < 8; yy++)
-            {
-                s += dct_table[v][yy] * tmp[yy][u];
-            }
-            s /= divisors[v * 8 + u];
-            q[v * 8 + u] = (int)(s < 0 ? s - 0.5f : s + 0.5f);
+            aan_dct(d + i * 8, 1);   // rows
         }
-    }
+        for (int i = 0; i < 8; i++)
+        {
+            aan_dct(d + i, 8);   // columns
+        }
+        for (int i = 0; i < 64; i++)
+        {
+            float s = d[i] * scales[i];
+            q[i] = (int)(s < 0 ? s - 0.5f : s + 0.5f);
+        }
     }
 
     // DC: the difference from the previous block, as its size category and then its bits
@@ -224,7 +228,6 @@ size_t jpeg_encode_422(const uint8_t *y, const uint8_t *cb, const uint8_t *cr, i
     {
         return 0;
     }
-    init_dct();
     static huffman luma_dc, luma_ac, chroma_dc, chroma_ac;
     static bool built = false;
     if (!built)
@@ -236,7 +239,7 @@ size_t jpeg_encode_422(const uint8_t *y, const uint8_t *cb, const uint8_t *cr, i
         built = true;
     }
 
-    // The quality's tables (libjpeg's scaling), in zigzag order for DQT; the divisors in natural order
+    // The quality's tables (libjpeg's scaling), in zigzag order for DQT; the scales in natural order
     if (quality < 1)
     {
         quality = 1;
@@ -247,7 +250,7 @@ size_t jpeg_encode_422(const uint8_t *y, const uint8_t *cb, const uint8_t *cr, i
     }
     int scale = quality < 50 ? 5000 / quality : 200 - 2 * quality;
     uint8_t qtables[128];
-    float luma_div[64], chroma_div[64];
+    float luma_scale[64], chroma_scale[64];
     for (int i = 0; i < 64; i++)
     {
         int l = (LUMA_Q[ZIGZAG[i]] * scale + 50) / 100, c = (CHROMA_Q[ZIGZAG[i]] * scale + 50) / 100;
@@ -255,8 +258,10 @@ size_t jpeg_encode_422(const uint8_t *y, const uint8_t *cb, const uint8_t *cr, i
         c = c < 1 ? 1 : c > 255 ? 255 : c;
         qtables[i] = (uint8_t)l;
         qtables[64 + i] = (uint8_t)c;
-        luma_div[ZIGZAG[i]] = (float)l;
-        chroma_div[ZIGZAG[i]] = (float)c;
+        int k = ZIGZAG[i];
+        float aan = 8.0f * AAN_SCALE[k / 8] * AAN_SCALE[k % 8];
+        luma_scale[k] = 1.0f / (l * aan);
+        chroma_scale[k] = 1.0f / (c * aan);
     }
 
     size_t n = jpeg_headers(out, out_size, 0, width, height, qtables);
@@ -270,10 +275,10 @@ size_t jpeg_encode_422(const uint8_t *y, const uint8_t *cb, const uint8_t *cr, i
     {
         for (int mx = 0; mx < width; mx += 16)
         {
-            encode_block(w, y, width, mx, my, luma_div, luma_dc, luma_ac, &pred_y);
-            encode_block(w, y, width, mx + 8, my, luma_div, luma_dc, luma_ac, &pred_y);
-            encode_block(w, cb, width / 2, mx / 2, my, chroma_div, chroma_dc, chroma_ac, &pred_cb);
-            encode_block(w, cr, width / 2, mx / 2, my, chroma_div, chroma_dc, chroma_ac, &pred_cr);
+            encode_block(w, y, width, mx, my, luma_scale, luma_dc, luma_ac, &pred_y);
+            encode_block(w, y, width, mx + 8, my, luma_scale, luma_dc, luma_ac, &pred_y);
+            encode_block(w, cb, width / 2, mx / 2, my, chroma_scale, chroma_dc, chroma_ac, &pred_cb);
+            encode_block(w, cr, width / 2, mx / 2, my, chroma_scale, chroma_dc, chroma_ac, &pred_cr);
         }
     }
     w.flush();
