@@ -410,6 +410,25 @@ int main()
         close(fd);
     }
 
+    // A page bigger than what may_send allows at once (the base station's ~12 KB page, with RAM for one TCP
+    // segment at a time): it still goes out whole
+    {
+        web_server srv;
+        web_config cfg;
+        cfg.port = free_tcp_port();
+        cfg.max_clients = 3;
+        cfg.client_buffer = 2048;
+        cfg.may_send = [](size_t size) { return size <= 1460; };
+        CHECK(srv.start(cfg, names, 3));
+        static std::string big(12000, 'x');
+        srv.set_page(big.data(), big.size());
+        std::string got = fetch(srv, cfg.port, "GET / HTTP/1.1\r\n\r\n");
+        size_t at = got.find("\r\n\r\n");
+        printf("big page: %zu of %zu bytes, a segment at a time\n", at == std::string::npos ? 0 : got.size() - at - 4,
+               big.size());
+        CHECK(at != std::string::npos && got.size() - at - 4 == big.size());
+    }
+
     // A stream's data (the radar's, M9): each payload with its length, in order; one too big for the
     // viewer's buffer skipped whole; the stream's JPEGs never mixed in
     {

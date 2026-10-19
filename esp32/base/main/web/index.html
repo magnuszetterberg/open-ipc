@@ -301,7 +301,13 @@ async function poll() {
   }
   setTimeout(poll, 1000);
 }
-poll();
+// Only once the page has loaded: a stream (an MJPEG <img>) started while it loads becomes part of the page,
+// which then never finishes loading, as a stream never ends
+if (document.readyState === 'complete') {
+  poll();
+} else {
+  window.addEventListener('load', poll);
+}
 </script>
 </body>
 </html>

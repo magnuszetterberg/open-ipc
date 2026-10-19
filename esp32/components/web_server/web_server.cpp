@@ -35,6 +35,9 @@ struct web_client
     bool closing = false;         // close once everything is sent
 };
 
+// The most handed to TCP at once: one segment on Ethernet (1500 - 40 bytes of IP and TCP headers)
+static const size_t SEGMENT = 1460;
+
 static void set_nonblocking(int fd)
 {
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
@@ -125,6 +128,9 @@ void web_server::flush(web_client &c)
     {
         const void *data = c.out_len > 0 ? (const void *)c.out : (const void *)c.body;
         size_t size = c.out_len > 0 ? c.out_len : c.body_left;
+        // A TCP segment at a time: asked for all of it, a page bigger than the free RAM's margin (the web
+        // page is ~12 KB) would never go out, and the browser would wait for its end forever
+        size = size < SEGMENT ? size : SEGMENT;
         if (config.may_send != nullptr && !config.may_send(size))
         {
             return;  // later: poll() tries again
