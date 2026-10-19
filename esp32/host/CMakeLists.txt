@@ -10,6 +10,7 @@ add_subdirectory(../components/wfb_core wfb_core)
 add_subdirectory(../components/rtp_jpeg rtp_jpeg)
 add_subdirectory(../components/rtsp_server rtsp_server)
 add_subdirectory(../components/web_server web_server)
+add_subdirectory(../components/radar_picture radar_picture)
 
 enable_testing()
 function(host_test name)
@@ -36,3 +37,6 @@ target_compile_definitions(test_rtsp PRIVATE DATA_DIR="${CMAKE_CURRENT_LIST_DIR}
 
 host_test(test_web web_server rtp_jpeg)
 target_compile_definitions(test_web PRIVATE DATA_DIR="${CMAKE_CURRENT_LIST_DIR}/tests/data")
+
+host_test(test_radar_picture radar_picture rtp_jpeg)
+target_compile_definitions(test_radar_picture PRIVATE DATA_DIR="${CMAKE_CURRENT_LIST_DIR}/tests/data")

@@ -17,15 +17,20 @@ open-ipc: what do you want to do?
 Set up the boards (once each):
   ./ipc flash camera N     a camera, N = 0, 1 or 2: plug it in when asked
   ./ipc flash base         the base station (ESP32-POE): plug it in when asked
+  ./ipc flash radar [N]    the radar camera (FRDM-RW612 + SR250), as camera N (default 2): its MCU-Link USB-C
+                           plugged in (./ipc setup radar first)
 
 Receive the cameras with the base station (up to 3 cameras, anywhere on the network):
   ./ipc view               every camera, live, in a browser
   ./ipc stream N URL       camera N to a video server (rtmp://...) with its telemetry burned in;
                            or a file name (cam0.mkv) to record, or nothing for a window
+     ... --radar M         with the radar camera M: its finding as text, its picture beside the camera's
+                           (RADAR_VIEW=text: the text only)
 
-Or with this PC's own WiFi adapter (no base station):
-  ./ipc receive            what the adapter hears, in a window: camera 0, or a PC running ./ipc send
-  ./ipc receive URL        camera 0 to a video server (rtmp://...) with its telemetry burned in;
+Or with this PC's own WiFi adapter (no base station), on the channel the boards were built with (CHANNEL=N):
+  ./ipc view radio         every camera the adapter hears, live, in a browser on this PC
+  ./ipc receive [N]        what the adapter hears, in a window: camera N (default 0), or a PC running ./ipc send
+  ./ipc receive [N] URL    camera N to a video server (rtmp://...) with its telemetry burned in;
                            or a file name (cam0.mkv) to record
 
 PC to PC:
@@ -37,6 +42,7 @@ Other:
   ./ipc wfb-ng             is there a newer wfb-ng upstream? ./ipc wfb-ng update moves to it, if the tests pass
   ./ipc log                what a board plugged into this PC is doing
   ./ipc setup              first time on a new PC: installs the tools
+  ./ipc setup radar        the tools for the radar camera too (Zephyr, about 2 GB)
 
 Add --port /dev/ttyUSBx to "flash" or "log" to name the port instead of plugging in.
 END
@@ -100,19 +106,59 @@ boot_log() {
   timeout "$2" esp32/idf.sh python3 esp32/monitor.py "$1" 2>/dev/null | tr -d '\r' || true
 }
 
-# This PC's address on the LAN: where the base station should send telemetry.
-pc_address() {
-  ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1
+# This PC's own networks (address/prefix), whatever their range.
+lan_networks() {
+  ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}'
 }
 
+# This PC's address on the LAN: where the base station should send telemetry. The one it uses for the
+# internet, or with no internet its first network's.
+pc_address() {
+  { ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+'; lan_networks | cut -d/ -f1; } | head -1 || true
+}
+
+# Is a base station answering at this address? Its /status.json says so.
+is_base() {
+  curl -s --connect-timeout 1 -m 2 "http://$1/status.json" 2>/dev/null | grep -q '"uptime_s":.*"cams":'
+}
+
+# The base station on this PC's own networks: asks every address of each (up to 1024 per network) at once.
+find_base() {
+  lan_networks | python3 -c '
+import ipaddress, sys
+for net in sys.stdin.read().split():
+    n = ipaddress.ip_interface(net).network
+    if n.prefixlen >= 22:
+        print(*n.hosts(), sep="\n")' |
+    xargs -P 128 -I{} sh -c 'curl -s --connect-timeout 1 -m 2 http://{}/status.json | grep -q "\"uptime_s\":.*\"cams\":" && echo {}' |
+    head -1 || true
+}
+
+# The base station's address: BASE if given, else the one saved by "flash base" if it still answers there,
+# else found on this PC's networks (its DHCP address may have changed) and saved again.
 base_address() {
+  local addr
   if [[ -n ${BASE:-} ]]; then
+    is_base "$BASE" || say "No base station answers at $BASE; trying it anyway." >&2
     printf '%s\n' "$BASE"
-  elif [[ -s $BASE_FILE ]]; then
-    cat "$BASE_FILE"
-  else
-    die "I don't know the base station's address yet. Run ./ipc flash base, or give it: BASE=192.168.1.x ./ipc $*"
+    return
   fi
+  if [[ -s $BASE_FILE ]]; then
+    addr=$(<"$BASE_FILE")
+    if is_base "$addr" || ! command -v curl >/dev/null; then   # without curl, unchecked as before
+      printf '%s\n' "$addr"
+      return
+    fi
+    say "The base station doesn't answer at $addr any more; looking for it on this PC's networks..." >&2
+  else
+    say "Looking for the base station on this PC's networks..." >&2
+  fi
+  command -v curl >/dev/null || die "I don't know the base station's address yet. Run ./ipc flash base, or give it: BASE=<its address> ./ipc $words"
+  addr=$(find_base)
+  [[ -n $addr ]] || die "no base station answers on this PC's networks ($(lan_networks | tr '\n' ' ')). Is it powered, with its Ethernet cable in? On another network: BASE=<its address> ./ipc $words"
+  printf '%s\n' "$addr" >"$BASE_FILE"
+  say "  found it at $addr" >&2
+  printf '%s\n' "$addr"
 }
 
 flash_camera() {
@@ -137,9 +183,9 @@ flash_camera() {
 }
 
 flash_base() {
-  local port=$1 to log addr
+  local port=$1 to log addr via
   to=${SEND_TO:-$(pc_address)}
-  [[ -n $to ]] || die "can't tell this PC's LAN address; give it: SEND_TO=192.168.1.x ./ipc flash base"
+  [[ -n $to ]] || die "this PC has no network address; give the one to send telemetry to: SEND_TO=<address> ./ipc flash base"
   [[ -n $port ]] || port=$(wait_for_new_port "the base station (ESP32-POE)")
 
   # Telemetry (and camera 0's video for receiver.sh) goes to this PC: a build-time setting (menuconfig, R8)
@@ -162,11 +208,60 @@ flash_base() {
   fi
   printf '%s\n' "$addr" >"$BASE_FILE"
   say "Done: the base station is at $addr."
+  via=$(ip -4 route get "$addr" 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1 || true)
+  if [[ -n $via && $via != "$to" ]]; then
+    say "  Note: telemetry goes to $to, but this PC reaches the base station as $via. If that's wrong:"
+    say "    SEND_TO=$via ./ipc flash base"
+  fi
   say "  web page:  http://$addr/          (./ipc view)"
   say "  RTSP:      rtsp://$addr:8554/cam0 ... cam2"
   say "  telemetry: to this PC ($to), UDP 5610-5612"
   open_firewall "$addr"
-  grep -oE 'cam[0-2]: [0-9]+ frames \(rssi -?[0-9]+\)' <<<"$log" | sort -u -k1,1 | sed 's/^/  hears /' || true
+  grep -oE 'cam[0-2]: [0-9]+ frames \(rssi -?[0-9]+[^)]*\)' <<<"$log" | sort -u -k1,1 | sed 's/^/  hears /' || true
+}
+
+# The radar camera's J-Link (the FRDM-RW612's MCU-Link): the USB device to flash through, and its serial port
+jlink_device() {
+  local d
+  for d in /sys/bus/usb/devices/*; do
+    [[ $(cat "$d/idVendor" 2>/dev/null) == 1366 ]] && printf '/dev/bus/usb/%03d/%03d\n' "$(cat "$d/busnum")" "$(cat "$d/devnum")"
+  done
+  return 0
+}
+jlink_port() {
+  local p
+  for p in /dev/serial/by-id/*SEGGER_J-Link*-if00; do [[ -e $p ]] && readlink -f "$p" && return; done
+  return 0
+}
+
+flash_radar() {
+  local cam=${1:-2} port=$2 dev log group
+  [[ $cam =~ ^[0-9]$ ]] || die "the radar's camera number must be 0-9 (default 2)"
+  esp32/zephyr.sh true 2>/dev/null || die "the radar camera's tools aren't installed yet: ./ipc setup radar"
+  dev=$(jlink_device | head -1)
+  [[ -n $dev ]] || die "no FRDM-RW612 found: plug its MCU-Link USB-C (J10) into this PC"
+  if [[ ! -w $dev ]]; then
+    group=$(stat -c %G "$(jlink_port)" 2>/dev/null || echo uucp)
+    die "this user can't reach the board's J-Link. Once, then unplug and plug the board in again:
+  echo 'SUBSYSTEM==\"usb\", ATTR{idVendor}==\"1366\", MODE=\"0660\", GROUP=\"$group\"' | sudo tee /etc/udev/rules.d/60-jlink.rules
+  sudo udevadm control --reload && sudo udevadm trigger"
+  fi
+  say "Building and flashing the radar camera (FRDM-RW612) as camera $cam, through its J-Link..."
+  CAM=$cam esp32/build.sh radar flash >"$STATE/flash.log" 2>&1 || die "flashing failed; the details are in $STATE/flash.log"
+  [[ -n $port ]] || port=$(jlink_port)
+  [[ -n $port ]] || die "flashed, but the J-Link's serial port is missing, so I can't check it"
+  remember_board "$port" "radar camera $cam"
+  say "  $(key_status)"
+  say "Checking that it sends (the radar takes a few seconds to start)..."
+  log=$(boot_log "$port" 12)
+  if grep -qE 'radar: [1-9][0-9]* measurements/s, [1-9][0-9]* sent' <<<"$log"; then
+    say "  $(grep -oE 'radar: [0-9]+ measurements/s.*' <<<"$log" | tail -1)"
+    say "Done: the radar camera is sending as camera $cam. See it with ./ipc view (base station) or ./ipc receive $cam."
+  elif grep -q 'uwb: no ready message\|radar: not started' <<<"$log"; then
+    say "Flashed, but the SR250 doesn't answer: is the shield seated, with jumper wires D0-D11 and D1-D12? ./ipc log --port $port"
+  else
+    say "Flashed, but I couldn't see it send. Watch it with: ./ipc log --port $port"
+  fi
 }
 
 pick_port() {
@@ -208,6 +303,14 @@ open_firewall() {
   say "  To let it through this PC's firewall later: $rule"
 }
 
+# The channel to listen on: CHANNEL, else the one the boards were built with (their sdkconfig, R8), else
+# the design's channel 6.
+link_channel() {
+  local c=${CHANNEL:-}
+  [[ -n $c ]] || c=$(grep -ohP '^CONFIG_LINK_CHANNEL=\K[0-9]+' esp32/camera/sdkconfig esp32/base/sdkconfig 2>/dev/null | head -1 || true)
+  printf '%s\n' "${c:-6}"
+}
+
 # The WiFi adapter for a role (rx or tx): TX_IF/RX_IF if set, else the best one here (wifi.sh). Warns, and
 # asks, when it's this PC's network connection: monitor mode takes it over until Ctrl-C.
 adapter_for() {
@@ -230,12 +333,17 @@ adapter_for() {
 # What this PC's own adapter hears, no base station: link.sh rx and a window (rx.sh, which tells camera
 # JPEG from webcam H.264 by itself), or camera 0 with its telemetry burned in, to a server or a file.
 receive() {
-  local out=$1 iface
+  local cam=0 out iface
+  if [[ ${1:-} =~ ^[0-9]$ ]]; then
+    cam=$1
+    shift
+  fi
+  out=${1:-}
   iface=$(adapter_for rx)
   say "$(key_status)"
-  say "It asks for your password: the adapter is switched to monitor mode. Ctrl-C stops."
+  say "Receiving camera $cam. It asks for your password: the adapter is switched to monitor mode. Ctrl-C stops."
   if [[ -z $out ]]; then
-    RX_IF=$iface VIDEO=auto exec pc/rx.sh
+    RX_IF=$iface VIDEO=auto CAM=$cam CHANNEL=$(link_channel) exec pc/rx.sh
   fi
   pc/build-wfb-ng.sh
   sudo -v
@@ -244,16 +352,41 @@ receive() {
   RECEIVE_LINK=""
   trap stop_receive EXIT
   trap 'exit 130' INT TERM
-  sudo env RX_IF="$iface" pc/link.sh rx &
+  sudo env RX_IF="$iface" CAM="$cam" CHANNEL="$(link_channel)" pc/link.sh rx &
   RECEIVE_LINK=$!
   sleep 2
   pc/burnin.sh "$out" || true
+}
+
+# Every camera this PC's own adapter hears, on the base station's web page, served by this PC (webview.py):
+# link.sh rx for all of them at once, no base station needed.
+view_radio() {
+  local iface channel cams=${CAMS:-0 1 2} web=${WEB_PORT:-8080}
+  iface=$(adapter_for rx)
+  channel=$(link_channel)
+  say "$(key_status)"
+  say "Receiving cameras $cams on channel $channel. It asks for your password: the adapter is switched to monitor mode. Ctrl-C stops."
+  pc/build-wfb-ng.sh
+  sudo -v
+  while sleep 60; do sudo -n -v; done &
+  RECEIVE_KEEPALIVE=$!
+  RECEIVE_LINK=""
+  trap stop_receive EXIT
+  trap 'exit 130' INT TERM
+  python3 pc/webview.py --cams $((${cams##* } + 1)) --http-port "$web" --bind "${WEB_BIND:-127.0.0.1}" &
+  RECEIVE_APP=$!
+  sudo env RX_IF="$iface" CAMS="$cams" CHANNEL="$channel" pc/link.sh rx &
+  RECEIVE_LINK=$!
+  sleep 2
+  open_url "http://localhost:$web/" "on this PC (WEB_BIND=0.0.0.0 ./ipc view radio shows it to the network)"
+  wait -n "$RECEIVE_LINK" "$RECEIVE_APP" || true
 }
 
 stop_receive() {
   trap '' INT TERM
   sudo pkill -TERM -f '[l]ink.sh rx' || true  # [l] keeps pkill from matching its own sudo
   if [[ -n ${RECEIVE_LINK:-} ]]; then wait "$RECEIVE_LINK" 2>/dev/null || true; fi
+  kill "${RECEIVE_APP:-}" 2>/dev/null || true
   kill "${RECEIVE_KEEPALIVE:-}" 2>/dev/null || true
 }
 
@@ -410,19 +543,24 @@ setup() {
   say "Ready. Next: ./ipc flash camera 0 (or ./ipc flash base)."
 }
 
+# Opens the page in this PC's browser when it has a desktop; the address works from any device on the network.
 open_url() {
   say "$1"
-  if command -v xdg-open >/dev/null; then
+  if [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]] && command -v xdg-open >/dev/null; then
     xdg-open "$1" >/dev/null 2>&1 || true
+  else
+    say "  (no desktop here: open it in a browser ${2:-on any device on the same network})"
   fi
 }
 
-# --port PATH, anywhere in the arguments
+# --port PATH and --radar N, anywhere in the arguments
 port=""
+radar=""
 args=()
 while (($#)); do
   case $1 in
     --port) port=${2:-}; [[ -n $port ]] || die "--port needs a port, e.g. --port /dev/ttyUSB0"; shift 2 ;;
+    --radar) radar=${2:-}; [[ $radar =~ ^[0-9]$ ]] || die "--radar needs the radar's camera number, e.g. --radar 2"; shift 2 ;;
     -h|--help|help) usage; exit 0 ;;
     *) args+=("$1"); shift ;;
   esac
@@ -430,25 +568,59 @@ done
 set -- "${args[@]}"
 mkdir -p "$STATE"
 
-case "${1:-} ${2:-}" in
-  "flash camera") flash_camera "${3:-}" "$port" ;;
-  "flash base") flash_base "$port" ;;
-  "view "*) addr=$(base_address view); open_url "http://$addr/" ;;
-  "stream "*)
+words="$*"
+# Words I don't know are refused, not ignored: "./ipc view something" must not quietly do "./ipc view".
+unknown() {
+  usage >&2
+  die "I don't know \"./ipc $words\"; what I can do is listed above."
+}
+
+case "${1:-}" in
+  flash)
+    case "${2:-} $#" in
+      "camera 2"|"camera 3") flash_camera "${3:-}" "$port" ;;
+      "base 2") flash_base "$port" ;;
+      "radar 2"|"radar 3") flash_radar "${3:-2}" "$port" ;;
+      *) unknown ;;
+    esac ;;
+  view)
+    if [[ $# == 2 && $2 == radio ]]; then
+      view_radio
+    else
+      (($# == 1)) || unknown
+      addr=$(base_address)
+      open_url "http://$addr/"
+    fi ;;
+  stream)
+    (($# <= 3)) || unknown
     n=${2:-}
     [[ $n =~ ^[012]$ ]] || die "which camera? ./ipc stream 0 rtmp://server/app/cam0"
-    addr=$(base_address stream "$n")
+    addr=$(base_address)
     say "Camera $n from the base station ($addr), telemetry burned in. Ctrl-C stops."
     say "  (\"NO TELEMETRY\" on the video: the base station sends it to another PC, or this PC's firewall drops it;"
     say "   ./ipc flash base sets it up for this PC.)"
+    if [[ -n $radar ]]; then
+      say "  With the radar camera $radar: its finding as text$([[ ${RADAR_VIEW:-beside} == beside ]] && echo ", its picture beside the camera's")."
+      export RADAR=$radar RADAR_IN=${RADAR_IN:-http://$addr/cam$radar.data}
+    fi
     VIDEO_IN=rtsp://$addr:8554/cam$n TELEMETRY_PORT=$((5610 + n)) exec pc/burnin.sh "${3:-}" ;;
-  "receive "*) receive "${2:-}" ;;
-  "send "*) send ;;
-  "keys "*) keys "${2:-}" ;;
-  "test "*) run_tests ;;
-  "wfb-ng "*) wfb_ng "${2:-}" ;;
-  "log "*) [[ -n $port ]] || port=$(pick_port); exec esp32/monitor.sh "$port" -t ;;
-  "setup "*) setup ;;
-  " ") usage ;;
-  *) usage; exit 1 ;;
+  receive) (($# <= 3)) || unknown; receive "${2:-}" "${3:-}" ;;
+  send) (($# == 1)) || unknown; send ;;
+  keys) (($# == 1)) || [[ $# == 2 && $2 == reset ]] || unknown; keys "${2:-}" ;;
+  test) (($# == 1)) || unknown; run_tests ;;
+  wfb-ng) (($# == 1)) || [[ $# == 2 && $2 =~ ^(check|update)$ ]] || unknown; wfb_ng "${2:-}" ;;
+  log)
+    (($# == 1)) || unknown
+    [[ -n $port ]] || port=$(pick_port)
+    exec esp32/monitor.sh "$port" -t ;;
+  setup)
+    if (($# == 1)); then
+      setup
+    elif [[ $# == 2 && $2 == radar ]]; then
+      esp32/zephyr-setup.sh
+    else
+      unknown
+    fi ;;
+  "") usage ;;
+  *) unknown ;;
 esac

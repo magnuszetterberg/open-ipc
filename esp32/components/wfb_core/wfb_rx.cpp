@@ -226,6 +226,20 @@ int wfb_rx::get_block_ring_idx(uint64_t block_idx)
     return ring_idx;
 }
 
+// Whether a fragment is already in, or its block already went out: looked up without changing anything,
+// so it can be asked before the packet is authenticated.
+bool wfb_rx::already_have(uint64_t block_idx, uint8_t fragment_idx) const
+{
+    for (int i = rx_ring_front, c = rx_ring_alloc; c > 0; i = modN(i + 1, config.ring_size), c--)
+    {
+        if (rx_ring[i].block_idx == block_idx)
+        {
+            return fragment_idx < fec_n && rx_ring[i].fragment_map[fragment_idx] != 0;
+        }
+    }
+    return last_known_block != (uint64_t)-1 && block_idx <= last_known_block;
+}
+
 void wfb_rx::process_packet(const uint8_t *buf, size_t size)
 {
     uint8_t new_session_hash[sizeof(session_hash)];
@@ -365,6 +379,16 @@ void wfb_rx::process_packet(const uint8_t *buf, size_t size)
 
     unsigned long long decrypted_len;
     wblock_hdr_t *block_hdr = (wblock_hdr_t*)buf;
+
+    // A block's FEC packets after its data is complete, or a fragment heard twice: wfb-ng decrypts and then
+    // ignores them. The nonce (block and fragment) is sent in the clear, so skip the decrypt: with FEC 8/12
+    // that is a third of a camera's packets, which a receiver without much CPU (the ESP32 base station)
+    // needs for the rest. Nothing changes before the packet is authenticated, so a forged one changes nothing.
+    if (already_have(be64toh(block_hdr->data_nonce) >> 8, (uint8_t)(be64toh(block_hdr->data_nonce) & 0xff)))
+    {
+        stats.count_p_redundant += 1;
+        return;
+    }
 
     if (crypto_aead_chacha20poly1305_decrypt(decrypted, &decrypted_len,
                                              NULL,

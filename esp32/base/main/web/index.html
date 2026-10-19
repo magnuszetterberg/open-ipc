@@ -17,7 +17,7 @@ h1 { font-size: 18px; margin: 0; }
 main { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 12px; }
 .tile { background: var(--tile); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .video { position: relative; aspect-ratio: 4 / 3; background: var(--video); }
-.video img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.video img, .video canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .video p { position: absolute; inset: 0; margin: 0; display: flex; align-items: center; justify-content: center; color: #aaa; }
 .text { padding: 8px 10px; font: 13px/1.5 ui-monospace, monospace; white-space: pre-wrap; }
 .text b { font: 600 14px system-ui, sans-serif; }
@@ -27,49 +27,254 @@ main { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 3
 <header><h1>Base station</h1><span id="state">connecting…</span></header>
 <main id="tiles"></main>
 <script>
-// One tile per camera from /status.json, once a second. A camera's MJPEG is only opened while it is heard:
-// the base station has few connections to give, and a stream from a silent camera would only hang.
+// One tile per camera from /status.json, once a second. A camera's stream is only opened while it is heard:
+// the base station has few connections to give, and a stream from a silent camera would only hang. A camera
+// shows as MJPEG; the radar (its telemetry says "radar") sends its data instead, which the tile draws.
 const tiles = [];
+const BLANK = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
 const two = n => String(n).padStart(2, '0');
 const uptime = s => `${two(Math.floor(s / 3600))}:${two(Math.floor(s / 60) % 60)}:${two(s % 60)}`;
 
 function tile(i) {
   const el = document.createElement('section');
   el.className = 'tile';
-  el.innerHTML = `<div class="video"><p></p><img alt="" hidden></div><div class="text"><b>Camera ${i}</b>\n<span></span></div>`;
+  el.innerHTML = `<div class="video"><p></p><img alt="" hidden><canvas width="640" height="480" hidden></canvas></div>` +
+                 `<div class="text"><b>Camera ${i}</b>\n<span></span></div>`;
   document.getElementById('tiles').append(el);
-  const t = { el, img: el.querySelector('img'), msg: el.querySelector('p'), text: el.querySelector('.text span'),
-              playing: false, retry_at: 0 };
+  const t = { el, img: el.querySelector('img'), canvas: el.querySelector('canvas'), msg: el.querySelector('p'),
+              text: el.querySelector('.text span'), playing: false, retry_at: 0, started: 0, heard_at: 0,
+              radar: null, abort: null };
   t.img.onerror = () => {  // refused (too many viewers) or dropped: try again in a while
-    stop(t, 'video unavailable (too many viewers?), retrying…');
-    t.retry_at = Date.now() + 5000;
+    if (!t.playing || t.radar) {
+      return;  // the blank image of stop()
+    }
+    unavailable(t);
   };
   return t;
 }
 
+function unavailable(t) {
+  stop(t, 'video unavailable (too many viewers?), retrying…');
+  t.retry_at = Date.now() + 5000;
+}
+
 function stop(t, why) {
-  t.img.removeAttribute('src');  // closes the connection
+  // A new source ends the stream's connection; Firefox keeps an MJPEG running when src is only removed,
+  // and the base station has few connections to give
+  t.img.src = BLANK;
   t.img.hidden = true;
+  if (t.abort) {
+    t.abort.abort();
+    t.abort = null;
+  }
+  t.canvas.hidden = true;
   t.msg.textContent = why;
   t.playing = false;
 }
 
-function show(i, cam) {
-  const t = tiles[i] || (tiles[i] = tile(i));
-  if (cam.video && !t.playing && Date.now() >= t.retry_at) {
+function play(t, i, radar) {
+  t.started = Date.now();
+  t.playing = true;
+  t.msg.textContent = '';
+  if (radar) {
+    t.radar = { data: null, history: [], drawing: false };
+    t.canvas.hidden = false;
+    read_data(t, i);
+  } else {
+    t.radar = null;
     t.img.src = `/cam${i}.mjpg?${Date.now()}`;
     t.img.hidden = false;
-    t.playing = true;
+  }
+}
+
+// The radar's data: a 16-bit little-endian length, then a "D1" payload (radar_picture.hpp), each measurement
+async function read_data(t, i) {
+  const ctl = new AbortController();
+  t.abort = ctl;
+  try {
+    const r = await fetch(`/cam${i}.data?${Date.now()}`, { cache: 'no-store', signal: ctl.signal });
+    if (!r.ok) {
+      throw new Error(r.status);
+    }
+    const reader = r.body.getReader();
+    let held = new Uint8Array(0);
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      const buf = new Uint8Array(held.length + value.length);
+      buf.set(held);
+      buf.set(value, held.length);
+      let at = 0;
+      while (at + 2 <= buf.length) {
+        const size = buf[at] | buf[at + 1] << 8;
+        if (at + 2 + size > buf.length) {
+          break;
+        }
+        radar_add(t, buf.subarray(at + 2, at + 2 + size));
+        at += 2 + size;
+      }
+      held = buf.slice(at);
+    }
+  } catch (e) {
+    if (ctl.signal.aborted) {
+      return;  // stop()
+    }
+  }
+  if (t.abort === ctl && t.playing) {
+    unavailable(t);
+  }
+}
+
+const HISTORY = 400;  // measurements in the trace: 20 s at 20 a second
+const TAP_M = 0.15;   // per tap, as radar_data's
+
+function radar_add(t, p) {
+  if (p.length < 16 || p[0] !== 68 || p[1] !== 49) {  // "D1"
+    return;
+  }
+  const v = new DataView(p.buffer, p.byteOffset, p.byteLength);
+  const antennas = p[5], taps = p[6];
+  if (p.length < 16 + antennas * taps) {
+    return;
+  }
+  const d = { learning: (p[4] & 1) !== 0, moving: (p[4] & 2) !== 0, distance: v.getUint16(8, true) / 100,
+              measurements: v.getUint32(12, true), movement: [] };
+  for (let a = 0; a < antennas; a++) {
+    d.movement.push(Array.from(p.subarray(16 + a * taps, 16 + (a + 1) * taps), x => x / 10));
+  }
+  const r = t.radar;
+  r.data = d;
+  r.history.push(d.moving ? d.distance : -1);
+  if (r.history.length > HISTORY) {
+    r.history.shift();
+  }
+  if (!r.drawing) {  // at most once a screen refresh
+    r.drawing = true;
+    requestAnimationFrame(() => {
+      r.drawing = false;
+      radar_draw(t.canvas, r);
+    });
+  }
+}
+
+// The radar picture, as the radar camera's radar_draw.cpp lays it out on 320 x 240: the finding,
+// movement against distance per antenna, and the distance of what moves over the last 20 s
+const W = 320, H = 240, L = 30, R = W - 8, G_TOP = 34, G_BOTTOM = 128, T_TOP = 162, T_BOTTOM = 222;
+const MAX_M = 8, GRAPH_DB = 6, THRESHOLD_DB = 1.5;
+const COLOURS = { background: 'rgb(16,19,24)', panel: 'rgb(24,28,35)', grid: 'rgb(48,54,64)', dim: 'rgb(138,145,156)',
+                  text: 'rgb(232,234,237)', mark: '#fff',
+                  antenna: ['rgb(255,160,40)', 'rgb(60,200,255)', 'rgb(160,255,120)'] };
+const clamp = (m, max) => Math.min(Math.max(m, 0), max);
+const x_of = m => L + Math.floor((R - L - 1) * clamp(m, MAX_M) / MAX_M);
+const graph_y = db => G_BOTTOM - 2 - Math.floor((G_BOTTOM - G_TOP - 4) * clamp(db, GRAPH_DB) / GRAPH_DB);
+const trace_y = m => T_BOTTOM - 2 - Math.floor((T_BOTTOM - T_TOP - 4) * clamp(m, MAX_M) / MAX_M);
+
+function radar_draw(canvas, r) {
+  const c = canvas.getContext('2d');
+  c.setTransform(canvas.width / W, 0, 0, canvas.height / H, 0, 0);
+  const rect = (x0, y0, x1, y1, colour) => {
+    c.fillStyle = colour;
+    c.fillRect(x0, y0, x1 - x0, y1 - y0);
+  };
+  const text = (x, y, s, size, colour) => {
+    c.font = `${size}px ui-monospace, monospace`;
+    c.textBaseline = 'top';
+    c.fillStyle = colour;
+    c.fillText(s, x, y);
+  };
+  const d = r.data;
+  rect(0, 0, W, H, COLOURS.background);
+
+  // The finding
+  const finding = !d ? 'waiting for the radar' : d.learning ? 'learning the room...'
+                : d.moving ? `moving at ${d.distance.toFixed(2)} m` : 'nothing moving';
+  text(8, 8, finding, 19, COLOURS.text);
+
+  // Movement against distance: the panel, a line per metre, the threshold dotted, a line per antenna
+  rect(L, G_TOP, R, G_BOTTOM, COLOURS.panel);
+  for (let m = 0; m <= MAX_M; m++) {
+    rect(x_of(m), G_TOP, x_of(m) + 1, G_BOTTOM, COLOURS.grid);
+    if (m % 2 === 0) {
+      const label = m === MAX_M ? `${m}m` : `${m}`;
+      text(Math.min(x_of(m) - 3, W - label.length * 7 - 1), G_BOTTOM + 3, label, 11, COLOURS.dim);
+    }
+  }
+  for (let x = L; x < R; x += 4) {
+    rect(x, graph_y(THRESHOLD_DB), x + 1, graph_y(THRESHOLD_DB) + 1, COLOURS.dim);
+  }
+  if (d) {
+    c.lineWidth = 2;
+    c.lineJoin = 'round';
+    d.movement.forEach((row, a) => {
+      c.strokeStyle = COLOURS.antenna[a % COLOURS.antenna.length];
+      c.beginPath();
+      row.forEach((db, k) => {
+        if (k * TAP_M <= MAX_M) {
+          c[k ? 'lineTo' : 'moveTo'](x_of(k * TAP_M), graph_y(db) + 1);
+        }
+      });
+      c.stroke();
+    });
+    if (d.moving) {
+      rect(x_of(d.distance) - 1, G_TOP, x_of(d.distance) + 1, G_BOTTOM, COLOURS.mark);
+    }
+  }
+
+  // The distance of what moves over the last 20 s: newest on the right, near at the bottom
+  rect(L, T_TOP, R, T_BOTTOM, COLOURS.panel);
+  for (let m = 0; m <= MAX_M; m += 2) {
+    rect(L, trace_y(m), R, trace_y(m) + 1, COLOURS.grid);
+  }
+  text(2, T_TOP - 3, '8m', 11, COLOURS.dim);
+  text(2, T_BOTTOM - 11, '0m', 11, COLOURS.dim);
+  text(L, T_BOTTOM + 3, 'last 20 s', 11, COLOURS.dim);
+  text(L, T_TOP - 15, 'distance of what moves', 11, COLOURS.dim);
+  r.history.forEach((m, k) => {
+    if (m >= 0) {
+      const x = L + Math.floor((R - L - 2) * (HISTORY - r.history.length + k) / (HISTORY - 1));
+      rect(x, trace_y(m) - 1, x + 2, trace_y(m) + 1, COLOURS.mark);
+    }
+  });
+}
+
+function show(i, cam) {
+  const t = tiles[i] || (tiles[i] = tile(i));
+  const m = cam.telemetry;
+  // Playing, but the base station doesn't count this viewer: the connection died without the browser
+  // noticing (the base station restarted, or the network dropped it), and the picture would stay frozen
+  if (t.playing && cam.viewers === 0 && Date.now() - t.started > 5000) {
+    stop(t, 'reconnecting…');
+  }
+  // Once a camera has said it is the radar, it stays one while it is heard: its telemetry missing for a
+  // moment mustn't switch the tile to MJPEG and back, each time a connection the browser has few of
+  if (cam.video && !t.heard_at) {
+    t.heard_at = Date.now();
+  } else if (!cam.video) {
+    t.heard_at = 0;
+    t.is_radar = false;
+  }
+  t.is_radar = t.is_radar || !!(m && m.radar);
+  const radar = t.is_radar;
+  if (t.playing && radar !== !!t.radar) {
+    stop(t, '');  // told what the camera is only now: open the right stream
+  }
+  // Which stream depends on the telemetry: a camera heard without it for a few seconds gets MJPEG
+  const known = m || Date.now() - t.heard_at > 3000;
+  if (cam.video && !t.playing && known && Date.now() >= t.retry_at) {
+    play(t, i, radar);
   } else if (!cam.video && t.playing) {
     stop(t, 'not heard');
   } else if (!cam.video) {
     t.msg.textContent = 'not heard';
   }
-  const m = cam.telemetry;
   let s = '';
   if (m) {
     const temp = m.temp_c == null ? '--' : `${Math.round(m.temp_c)} °C`;
-    s += `UP ${uptime(m.uptime_s | 0)}  ${m.fps} FPS  ${Number(m.frame_kb).toFixed(1)} KB  TEMP ${temp}\n`;
+    s += radar
+      ? `UP ${uptime(m.uptime_s | 0)}  ${m.fps} MEASUREMENTS/S\n`
+      : `UP ${uptime(m.uptime_s | 0)}  ${m.fps} FPS  ${Number(m.frame_kb).toFixed(1)} KB  TEMP ${temp}\n`;
     s += 'rssi_dbm' in m
       ? `SIG ${m.rssi_dbm} dBm  LOSS ${Number(m.loss_pct).toFixed(1)}%  ${(m.video_kbps / 1000).toFixed(1)} Mbit/s` +
         ('tx_dbm' in m ? `  TX ${Number(m.tx_dbm).toFixed(1)} dBm` : '')
@@ -80,18 +285,29 @@ function show(i, cam) {
   t.text.textContent = s;  // telemetry is shown as text, never as markup
 }
 
+let last_uptime = 0;
 async function poll() {
   try {
     const r = await fetch(`/status.json?${Date.now()}`, { cache: 'no-store' });
     const s = await r.json();
+    if (s.uptime_s < last_uptime) {  // the base station restarted: every stream's connection is gone
+      tiles.forEach(t => t && t.playing && stop(t, 'reconnecting…'));
+    }
+    last_uptime = s.uptime_s;
     s.cams.forEach((cam, i) => show(i, cam));
-    document.getElementById('state').textContent = `up ${uptime(s.uptime_s)}`;
+    document.getElementById('state').textContent = `up ${uptime(s.uptime_s)}, started after ${s.reset}`;
   } catch (e) {
     document.getElementById('state').textContent = 'base station not answering';
   }
   setTimeout(poll, 1000);
 }
-poll();
+// Only once the page has loaded: a stream (an MJPEG <img>) started while it loads becomes part of the page,
+// which then never finishes loading, as a stream never ends
+if (document.readyState === 'complete') {
+  poll();
+} else {
+  window.addEventListener('load', poll);
+}
 </script>
 </body>
 </html>

@@ -1,2 +1,6 @@
 # Your own link keys (./ipc keys): never committed (R9)
 keys/own/
+
+# Built on the PC: radar_render (pc/build-radar-render.sh), and Python caches
+pc/build/
+__pycache__/

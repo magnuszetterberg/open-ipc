@@ -102,10 +102,14 @@ int main()
     wfb_rx_stats stats;
     CHECK(run(count, [](int) { return false; }, &stats) == expected(count));
     CHECK(stats.count_p_fec_recovered == 0 && stats.count_p_lost == 0 && stats.count_p_dec_err == 0);
+    // Each block's 4 FEC frames come after its data is complete: not decrypted
+    printf("no loss: %u data packets decrypted, %u FEC packets not needed\n", (unsigned)stats.count_p_data,
+           (unsigned)stats.count_p_redundant);
+    CHECK(stats.count_p_redundant == 13 * 4 && stats.count_p_data == 13 * 8);
 
     // Lose 4 of every 12 frames (n - k): FEC recovers all of it.
     CHECK(run(count, [](int f) { return f % 12 < 4; }, &stats) == expected(count));
-    CHECK(stats.count_p_fec_recovered > 0 && stats.count_p_lost == 0);
+    CHECK(stats.count_p_fec_recovered > 0 && stats.count_p_lost == 0 && stats.count_p_redundant == 0);
 
     // Lose 4 frames per block at other positions, including FEC frames.
     CHECK(run(count, [](int f) { return f % 12 == 1 || f % 12 == 6 || f % 12 == 9 || f % 12 == 11; }) ==

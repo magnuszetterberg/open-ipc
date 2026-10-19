@@ -10,8 +10,10 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/ringbuf.h"
 #include "freertos/task.h"
 #include "eth.hpp"
 #include "keys.hpp"
@@ -59,7 +61,9 @@ struct web_sink : jpeg_stream_sink
     }
 };
 
-// Recovered video: RTP/JPEG to the camera's RTSP clients and web viewers (and camera 0's to video_out).
+// Recovered video: RTP/JPEG to the camera's RTSP clients and web viewers (and camera 0's to video_out). A
+// payload that isn't RTP is the camera's data (the radar's, M9): to its web viewers as it is, for the page
+// to draw.
 struct video_sink : wfb_payload_sink
 {
     int index = 0;
@@ -69,7 +73,20 @@ struct video_sink : wfb_payload_sink
     {
         packets += 1;
         bytes += size;
-        frames += (size >= 12 && (buf[1] & 0x80)) ? 1 : 0;  // the RTP marker ends a frame
+        if (index == 0 && video_out != nullptr)
+        {
+            video_out->send_payload(buf, size);
+        }
+        if (size < 12 || (buf[0] & 0xc0) != 0x80)  // not RTP version 2
+        {
+            frames += 1;  // each payload is one
+            if (web_up && web.viewers(index) > 0)
+            {
+                web.data(index, buf, size);
+            }
+            return;
+        }
+        frames += (buf[1] & 0x80) ? 1 : 0;  // the RTP marker ends a frame
         if (rtsp_up)
         {
             rtsp.send_rtp(index, buf, size);
@@ -77,10 +94,6 @@ struct video_sink : wfb_payload_sink
         if (web_up && web.viewers(index) > 0)
         {
             streamer->push(buf, size);  // a viewer joining mid-frame starts with the next one
-        }
-        if (index == 0 && video_out != nullptr)
-        {
-            video_out->send_payload(buf, size);
         }
     }
 };
@@ -128,6 +141,7 @@ struct camera
     uint32_t frames_heard = 0;
     uint32_t last_cut = 0;  // streamer.frames_cut at the last report
     int rssi_sum = 0;
+    uint8_t rate = 0;       // of the last frame heard (radio_frame::rate)
     wfb_rx_stats last;
 };
 
@@ -191,13 +205,65 @@ static bool may_send(size_t size)
 }
 #endif
 
+// The console without waiting: a log line goes into a ring buffer, and a task of the lowest priority writes
+// it to the UART whenever nothing else needs core 1. ESP_LOG itself waits for the UART (115200 baud), and the
+// stats lines held the receive task for 37 ms each second: the receive slots filled and frames were dropped.
+// Other tasks wait for room (as they waited for the UART before), so lines at boot aren't lost.
+static RingbufHandle_t log_ring = nullptr;
+static TaskHandle_t receive_handle = nullptr;
+
+static int log_to_ring(const char *format, va_list args)
+{
+    char line[320];
+    int n = vsnprintf(line, sizeof(line), format, args);
+    if (n > 0)
+    {
+        TickType_t wait = xTaskGetCurrentTaskHandle() == receive_handle ? 0 : pdMS_TO_TICKS(500);
+        xRingbufferSend(log_ring, line, n < (int)sizeof(line) ? (size_t)n : sizeof(line) - 1, wait);
+    }
+    return n;
+}
+
+static void log_task(void *arg)
+{
+    for (;;)
+    {
+        size_t size = 0;
+        char *line = (char *)xRingbufferReceive(log_ring, &size, portMAX_DELAY);
+        if (line != nullptr)
+        {
+            fwrite(line, 1, size, stdout);
+            fflush(stdout);
+            vRingbufferReturnItem(log_ring, line);
+        }
+    }
+}
+
+// Why the base station last started, for the log and /status.json: a crash shows without a serial console
+static const char *reset_name(esp_reset_reason_t r)
+{
+    switch (r)
+    {
+    case ESP_RST_POWERON: return "power on";
+    case ESP_RST_SW: return "restart";
+    case ESP_RST_PANIC: return "crash";
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT: return "watchdog";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_EXT: return "reset pin";
+    default: return "other";
+    }
+}
+
 // /status.json for the web view: per camera, whether its video is heard and its latest telemetry (with the
 // signal quality added, as sent over UDP), or null when none came for 3 s.
 static void update_status(const uint32_t *video_frames)
 {
     static char json[web_server::status_max];
     uint64_t now = esp_timer_get_time();
-    int n = snprintf(json, sizeof(json), "{\"uptime_s\":%llu,\"cams\":[", (unsigned long long)(now / 1000000));
+    int n = snprintf(json, sizeof(json), "{\"uptime_s\":%llu,\"reset\":\"%s\",\"cams\":[",
+                     (unsigned long long)(now / 1000000), reset_name(esp_reset_reason()));
     for (int i = 0; i < CONFIG_BASE_CAMERAS && n > 0 && n < (int)sizeof(json); i++)
     {
         const telemetry_sink &t = cameras[i].telemetry_out;
@@ -215,7 +281,7 @@ static void update_status(const uint32_t *video_frames)
 static void report(radio_rx *radio)
 {
     static uint32_t last_heard = 0, last_overflow = 0, last_rtsp_sent = 0, last_rtsp_dropped = 0;
-    static uint32_t last_web_sent = 0, last_web_cut = 0, last_web_skipped = 0;
+    static uint32_t last_web_sent = 0, last_web_cut = 0, last_web_skipped = 0, last_data_sent = 0, last_data_skipped = 0;
     uint32_t video_frames[CONFIG_BASE_CAMERAS];
     for (int i = 0; i < CONFIG_BASE_CAMERAS; i++)
     {
@@ -237,9 +303,11 @@ static void report(radio_rx *radio)
         c.signal.video_kbps = c.video_out.bytes * 8 / 1000;
         if (c.frames_heard > 0)
         {
-            ESP_LOGI(TAG, "cam%d: %lu frames (rssi %d) | video %lu fps, %lu kbit/s, fec_rec %lu, lost %lu, dec_err %lu | "
+            char rate[16];
+            ESP_LOGI(TAG, "cam%d: %lu frames (rssi %d, %s) | video %lu fps, %lu kbit/s, fec_rec %lu, lost %lu, dec_err %lu | "
                           "telemetry %lu | rtsp clients %d, web viewers %d (%lu JPEGs cut on air)",
-                     i, (unsigned long)c.frames_heard, c.signal.rssi_dbm, (unsigned long)c.video_out.frames,
+                     i, (unsigned long)c.frames_heard, c.signal.rssi_dbm, radio_rate_name(c.rate, rate, sizeof(rate)),
+                     (unsigned long)c.video_out.frames,
                      (unsigned long)c.signal.video_kbps,
                      (unsigned long)(s.count_p_fec_recovered - c.last.count_p_fec_recovered), (unsigned long)lost,
                      (unsigned long)(s.count_p_dec_err - c.last.count_p_dec_err),
@@ -255,11 +323,12 @@ static void report(radio_rx *radio)
     }
     uint32_t heard = radio->heard, overflow = radio->overflow;
     ESP_LOGI(TAG, "radio: %lu data frames heard, %lu dropped (slots full) | rtsp: %lu sent, %lu dropped | "
-                  "web: %lu JPEGs sent, %lu cut, %lu skipped, %lu refused | ethernet link drops %lu | RAM free %u (lowest %u)",
+                  "web: %lu JPEGs sent, %lu cut, %lu skipped, %lu data sent, %lu skipped, %lu refused | ethernet link drops %lu | RAM free %u (lowest %u)",
              (unsigned long)(heard - last_heard), (unsigned long)(overflow - last_overflow),
              (unsigned long)(rtsp.sent - last_rtsp_sent), (unsigned long)(rtsp.dropped - last_rtsp_dropped),
              (unsigned long)(web.jpegs_sent - last_web_sent), (unsigned long)(web.jpegs_cut - last_web_cut),
-             (unsigned long)(web.jpegs_skipped - last_web_skipped), (unsigned long)web.refused,
+             (unsigned long)(web.jpegs_skipped - last_web_skipped), (unsigned long)(web.data_sent - last_data_sent),
+             (unsigned long)(web.data_skipped - last_data_skipped), (unsigned long)web.refused,
              (unsigned long)eth_link_drops(), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     // "lowest" covers the second since the last report: viewers' TCP data lives on the heap for moments only
@@ -268,6 +337,8 @@ static void report(radio_rx *radio)
     last_web_sent = web.jpegs_sent;
     last_web_cut = web.jpegs_cut;
     last_web_skipped = web.jpegs_skipped;
+    last_data_sent = web.data_sent;
+    last_data_skipped = web.data_skipped;
     last_heard = heard;
     last_overflow = overflow;
     last_rtsp_sent = rtsp.sent;
@@ -293,15 +364,17 @@ static void receive_task(void *arg)
                 camera &c = cameras[i];
                 c.frames_heard += 1;
                 c.rssi_sum += f->rssi;
+                c.rate = f->rate;
                 (telemetry ? c.telemetry : c.video).process_packet(f->data, f->size);
             }
             radio->release(f);
         }
         // Video goes out as it arrives (send_rtp, jpeg_data); polling only accepts clients, reads their requests
-        // and sends what waited. Every 5 ms is plenty, and select() on every radio frame costs CPU.
+        // and sends what waited. select() costs 0.5 ms, sometimes 4 ms: every 5 ms that was 100 ms of each
+        // second, and a camera's burst of packets arriving meanwhile overflowed the receive slots. 20 ms.
         if (esp_timer_get_time() >= next_poll_us)
         {
-            next_poll_us = esp_timer_get_time() + 5000;
+            next_poll_us = esp_timer_get_time() + 20000;
             if (rtsp_up)
             {
                 rtsp.poll(0);
@@ -321,11 +394,17 @@ static void receive_task(void *arg)
 
 extern "C" void app_main(void)
 {
+    log_ring = xRingbufferCreate(2048, RINGBUF_TYPE_NOSPLIT);  // a second's stats lines
+    if (log_ring != nullptr && xTaskCreatePinnedToCore(log_task, "log", 3072, nullptr, 1, nullptr, 1) == pdPASS)
+    {
+        esp_log_set_vprintf(log_to_ring);
+    }
+    ESP_LOGI(TAG, "started after: %s", reset_name(esp_reset_reason()));
     radio_config radio_cfg;
     radio_cfg.channel = CONFIG_LINK_CHANNEL;
     ESP_ERROR_CHECK(radio_start(radio_cfg));
     static radio_rx radio;
-    ESP_ERROR_CHECK(radio.start(CONFIG_LINK_RX_SLOTS));
+    ESP_ERROR_CHECK(radio.start(CONFIG_LINK_RX_SLOTS, CONFIG_LINK_RX_SMALL_SLOTS));
     if (!init_cameras())
     {
         return;
@@ -382,5 +461,5 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "%d cameras on link 0x%06x; RAM free %u (largest block %u)", CONFIG_BASE_CAMERAS, CONFIG_LINK_ID,
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-    xTaskCreatePinnedToCore(receive_task, "receive", 6144, &radio, 5, nullptr, 1);  // core 1 (Coding conventions)
+    xTaskCreatePinnedToCore(receive_task, "receive", 6144, &radio, 5, &receive_handle, 1);  // core 1 (Coding conventions)
 }

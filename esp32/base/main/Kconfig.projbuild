@@ -31,10 +31,20 @@ menu "wfb-ng link"
     config LINK_RX_SLOTS
         int "Received frames that can wait to be processed"
         range 4 64
-        default 8
+        default 10
         help
             Each costs about 1.5 KB of internal RAM. Three cameras and Ethernet leave little to spare on an
-            ESP32 without PSRAM (#20).
+            ESP32 without PSRAM (#20). A camera sends each JPEG as a burst of about 12 packets, which
+            8 slots didn't always hold.
+
+    config LINK_RX_SMALL_SLOTS
+        int "Received small frames that can wait to be processed"
+        range 0 64
+        default 24
+        help
+            Slots of 256 bytes for small frames: the empty packets a camera pads its last FEC block with
+            after each JPEG (7 of its ~24 frames), and telemetry. Each costs about 270 bytes, so they hold a
+            camera's burst for far less RAM than the large slots would.
 
 endmenu
 
@@ -84,11 +94,12 @@ menu "Ethernet out"
     config BASE_WEB_CLIENTS
         int "Web connections at once"
         depends on BASE_WEB
-        range 1 8
+        range 2 8
         default 4
         help
             Each camera playing in a browser takes one, and the page's status requests one briefly: a page
-            with three cameras needs four. A connection over the limit gets "503 too many viewers".
+            with three cameras needs four. Video gets all but one, so the page can always ask for its
+            status. A connection over the limit gets "503 too many viewers".
 
     config BASE_WEB_CLIENT_BUFFER
         int "Web buffer per connection (bytes)"

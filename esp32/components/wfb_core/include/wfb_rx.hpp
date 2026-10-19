@@ -42,6 +42,7 @@ struct wfb_rx_stats
     uint32_t count_p_dec_err = 0;       // packets that didn't decrypt, or sessions not for us
     uint32_t count_p_session = 0;       // session packets accepted
     uint32_t count_p_data = 0;          // data packets decrypted
+    uint32_t count_p_redundant = 0;     // data packets not needed (their block was done): not decrypted
     uint32_t count_p_fec_recovered = 0; // data packets rebuilt by FEC
     uint32_t count_p_lost = 0;          // data packets neither received nor recovered
     uint32_t count_p_bad = 0;           // malformed packets
@@ -82,6 +83,7 @@ private:
     void send_packet(int ring_idx, int fragment_idx);
     void apply_fec(int ring_idx);
     int get_block_ring_idx(uint64_t block_idx);
+    bool already_have(uint64_t block_idx, uint8_t fragment_idx) const;
     int rx_ring_push(void);
 
     wfb_payload_sink &sink;

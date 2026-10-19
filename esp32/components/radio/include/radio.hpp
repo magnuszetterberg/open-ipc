@@ -38,14 +38,23 @@ private:
     uint8_t frame[1500];     // esp_wifi_80211_tx()'s limit
 };
 
+static const size_t RADIO_FRAME_MAX = 1500;  // a received wfb-ng packet, at most
+
 // One received wfb-ng packet: the 802.11 header and FCS are already stripped.
 struct radio_frame
 {
     uint32_t channel_id;  // (link_id << 8) + radio_port, from the second address
     int8_t rssi;          // dBm
+    uint8_t rate;         // on air: RADIO_RATE_HT | MCS for 802.11n, else the legacy rate (wifi_phy_rate_t)
     uint16_t size;
-    uint8_t data[1500];
+    uint16_t capacity;    // of data: a large slot or a small one
+    uint8_t *data;
 };
+
+static const uint8_t RADIO_RATE_HT = 0x80;
+
+// A frame's rate as text, e.g. "MCS 3" or "1 Mbit/s", for stats lines.
+const char *radio_rate_name(uint8_t rate, char *buf, size_t size);
 
 // Receives wfb-ng frames in promiscuous mode (R5). The WiFi driver's callback only checks and copies;
 // the frames are handed over through a queue, to be decrypted and decoded in the caller's task.
@@ -53,8 +62,10 @@ struct radio_frame
 class radio_rx
 {
 public:
-    // slots: frames that can wait at once; allocated here, nothing later (Coding conventions).
-    esp_err_t start(int slots);
+    // slots: frames that can wait at once; allocated here, nothing later (Coding conventions). small_slots
+    // of small_size bytes take the small frames first (a camera's FEC padding, telemetry), so a burst of them
+    // doesn't use up the 1500-byte ones.
+    esp_err_t start(int slots, int small_slots = 0, size_t small_size = 256);
 
     // The next frame, or nullptr after timeout. Hand it back with release() once processed.
     radio_frame *receive(TickType_t timeout);
@@ -68,5 +79,6 @@ public:
 
 private:
     static void callback(void *buf, wifi_promiscuous_pkt_type_t type);
-    QueueHandle_t free_slots = nullptr, full_slots = nullptr;
+    QueueHandle_t free_slots = nullptr, free_small = nullptr, full_slots = nullptr;
+    size_t small_size = 0;
 };

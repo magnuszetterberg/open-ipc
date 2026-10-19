@@ -1,0 +1,45 @@
+/*
+ * The SR250-ARD shield on the FRDM-RW612's Arduino header: SPI on flexcomm1 (the board routes MOSI and MISO
+ * to D11 and D12 with NXP's rework, or jumper wires D0-D11 and D1-D12), the SR250's IRQ on GPIO 45 and its
+ * RSTN on GPIO 18 (UM12413, table 2; NXP's frdm_rw612 overlays for the SR250).
+ */
+
+/* GPIO 18 is already a GPIO on this board; GPIO 45 (Arduino A2) isn't. Its pull-down is set here: on the
+ * RW612 a pull lives in the pin mux, so the GPIO flag below doesn't reach the pin. */
+&pinmux_hsgpio1 {
+	group1 {
+		pinmux = <IO_MUX_GPIO45>;
+		slew-rate = "normal";
+		bias-pull-down;
+	};
+};
+/* SPI with chip select 0 (D10) only. The board's own setting adds the chip select 1 group after it, and as
+ * the pin mux driver clears a pin's functions before setting the next, that leaves the controller wired to
+ * chip select 1 (IO10): D10 is never driven and the SR250 is never selected. */
+&pinctrl {
+	pinmux_sr250_spi: pinmux_sr250_spi {
+		group0 {
+			pinmux = <IO_MUX_FC1_SPI_SS0>;
+			slew-rate = "ultra";
+		};
+	};
+};
+
+&flexcomm1 {
+	pinctrl-0 = <&pinmux_sr250_spi>;
+
+	/* the SR250 needs time after chip select before the first clock, and between transfers: NXP's own
+	 * firmware sets the SPI controller's delays to their maximum, 15 clocks (about 1 us at 16 MHz) */
+	pre-delay = <1000>;
+	post-delay = <1000>;
+	transfer-delay = <1000>;
+
+	sr250: sr250@0 {
+		compatible = "nxp,sr250";
+		reg = <0>;
+		/* 1 MHz carries the radar's 20 KB/s with room to spare; on jumper wires it is also the safe choice */
+		spi-max-frequency = <1000000>;
+		irq-gpios = <&hsgpio1 13 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>;
+		reset-gpios = <&hsgpio0 18 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+	};
+};

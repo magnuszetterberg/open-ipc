@@ -1,5 +1,6 @@
 // A small HTTP server for the base station's web view (docs/DESIGN.md, M7): a page, each stream's video as
-// MJPEG (multipart/x-mixed-replace, which a browser shows in an <img>), and a status document. Plain BSD
+// MJPEG (multipart/x-mixed-replace, which a browser shows in an <img>), a stream's other payloads as they
+// come (the radar's data, which the page draws), and a status document. Plain BSD
 // sockets and no ESP-IDF calls, so it builds for the ESP32 (lwIP) and for Linux, where the host tests play it.
 //
 // Single-threaded, like rtsp_server: the caller's loop calls poll() and the jpeg_*() calls from one task, so
@@ -14,7 +15,7 @@
 struct web_config
 {
     uint16_t port = 80;
-    int max_clients = 4;          // MJPEG viewers, page and status requests together
+    int max_clients = 4;          // MJPEG viewers, page and status requests together; viewers get all but one
     size_t client_buffer = 4096;  // per client: response headers, the status document, MJPEG waiting for TCP
     // Asked before data is handed to TCP, whose buffers come from the heap: false keeps it waiting here. The
     // base station says no while RAM runs low, so viewers can't starve its radio. Null: always yes.
@@ -47,13 +48,20 @@ public:
     void jpeg_data(int stream, const uint8_t *data, size_t size);
     void jpeg_end(int stream, bool complete);
 
-    // MJPEG viewers of a stream.
+    // One of a stream's payloads that isn't video (the radar's data, M9), to its viewers at
+    // http://<host>/<name>.data: a 16-bit little-endian length, then the payload. A viewer whose buffer
+    // can't take all of it skips it.
+    void data(int stream, const uint8_t *payload, size_t size);
+
+    // Viewers of a stream: MJPEG, or its data.
     int viewers(int stream) const;
 
     uint32_t jpegs_sent = 0;  // JPEGs that reached a viewer whole
     uint32_t jpegs_cut = 0;   // JPEGs a viewer got only part of: cut off on the way, or the viewer too slow
     uint32_t jpegs_skipped = 0;  // JPEGs a viewer didn't get at all: still behind with the ones before
-    uint32_t refused = 0;     // connections turned away: every client slot in use
+    uint32_t refused = 0;     // connections turned away: every client slot in use, or all but one for video
+    uint32_t data_sent = 0;   // payloads that reached a data viewer
+    uint32_t data_skipped = 0;  // payloads a data viewer had no room for
 
 private:
     void handle_request(web_client &c);

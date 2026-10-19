@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Check the ESP32's M1 counter stream as wfb_rx delivers it: prints, once a second, how many
-payloads arrived and whether any counter values were missing, repeated or out of order.
+"""Check a board's counter stream as wfb_rx delivers it (the ESP32's in M1, the RW612's in M8): prints,
+once a second, how many payloads arrived and whether any counter values were missing, repeated or out of order.
 
 Usage: esp32/tools/counter_check.py [port]     (default 5600, link.sh's OUT_PORT)
 Run it next to `sudo pc/link.sh rx`; rx.sh's video window holds port 5600 itself. Ctrl-C quits.
@@ -14,9 +14,9 @@ port = int(sys.argv[1]) if len(sys.argv) > 1 else 5600
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.bind(("127.0.0.1", port))
 sock.settimeout(0.2)
-print(f"listening on 127.0.0.1:{port} for 'esp32 counter <n>' payloads")
+print(f"listening on 127.0.0.1:{port} for '<board> counter <n>' payloads")
 
-pattern = re.compile(rb"^esp32 counter (\d+) ")
+pattern = re.compile(rb"^(?:esp32|rw612) counter (\d+) ")
 last = None
 total = {"received": 0, "missing": 0, "repeated": 0, "other": 0}
 second = dict.fromkeys(total, 0)
