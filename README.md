@@ -46,14 +46,14 @@ Each one asks you to plug the board in, finds its USB port, flashes it, checks t
 | | with the base station | with this PC's WiFi adapter |
 |---|---|---|
 | you need | an Olimex ESP32-POE, with an Ethernet cable to your network | a USB WiFi adapter that receives in monitor mode (see Which WiFi adapter) |
-| cameras | up to 3 | one at a time: camera 0, or `./ipc receive N` |
-| watch | `./ipc view`: every camera in a browser, on any device on the network | `./ipc receive`: camera 0 in a window on this PC |
+| cameras | up to 3 | up to 3 in the browser; one at a time in a window or to a server |
+| watch | `./ipc view`: every camera in a browser, on any device on the network | `./ipc view radio`: every camera in a browser on this PC, the same page; or `./ipc receive N`: camera N in a window |
 | to a video server, telemetry burned in | `./ipc stream 0 rtmp://server/app/cam0` | `./ipc receive rtmp://server/app/cam0` |
 | record to a file instead | `./ipc stream 0 cam0.mkv` | `./ipc receive cam0.mkv` |
 
 With the base station, `./ipc flash base` sends the telemetry to the PC it runs on, offers to let it through that PC's firewall, and remembers the base station's address for `view` and `stream`. If that address changes (a new DHCP lease), they look for the base station on the PC's own networks; on another network, give it with `BASE=<address>`. The base station has room for about three video streams at once in total: a browser showing three cameras, or a mix of browsers and streams.
 
-With this PC's adapter, `./ipc receive` picks an adapter that can receive and asks for your password (the adapter is switched to monitor mode). While it receives, the adapter can't be used for the network; if it's the PC's connection, it asks first. Ctrl-C gives it back.
+With this PC's adapter, `./ipc view radio` and `./ipc receive` pick an adapter that can receive and ask for your password (the adapter is switched to monitor mode). While it receives, the adapter can't be used for the network; if it's the PC's connection, they ask first. Ctrl-C gives it back. They listen on the channel the boards were last built with here, or `CHANNEL=N`. `./ipc view radio` serves the page at http://localhost:8080 (`WEB_PORT=` for another port, `WEB_BIND=0.0.0.0` to show it to the network) and only ever shows whole pictures: one with a piece lost on the air is skipped.
 
 ### 4. Your own keys (before you rely on it)
 
@@ -160,7 +160,8 @@ At the top there is only `./ipc`, which covers the everyday tasks. What it uses 
 |---|---|
 | `ipc` | the front door: setup, flash (cameras, base, radar), view, stream, receive, send, keys, test, wfb-ng, log |
 | `pc/tx.sh` / `pc/rx.sh` | one command per PC for the PC-to-PC link (link + sender/receiver) |
-| `pc/link.sh [tx\|rx]` | puts the adapter in monitor mode and runs `wfb_tx` / `wfb_rx` (needs sudo); `rx` receives camera 0 (`CAM=N` another), and its telemetry on UDP 5610, and keeps the latest signal stats in `/tmp/open-ipc-rx.stats` |
+| `pc/link.sh [tx\|rx]` | puts the adapter in monitor mode and runs `wfb_tx` / `wfb_rx` (needs sudo); `rx` receives camera 0 (`CAM=N` another), and its telemetry on UDP 5610, and keeps the latest signal stats in `/tmp/open-ipc-rx.stats`; `CAMS="0 1 2"` receives several, camera N on UDP 5600 + N and 5610 + N |
+| `pc/webview.py` | the base station's web page, served by this PC from what `link.sh` receives (`./ipc view radio`) |
 | `pc/wifi.sh` | which WiFi adapter sends or receives, and which keys: used by `link.sh` and `ipc` |
 | `pc/sender.sh` | webcam or test pattern → H.264 → RTP; burns a `TX hh:mm:ss.mmm` timestamp into each frame (`overlay.txt`) |
 | `pc/receiver.sh` | RTP → low-latency video window |

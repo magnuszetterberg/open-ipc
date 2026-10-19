@@ -13,6 +13,8 @@
 # Telemetry out: UDP 127.0.0.1:5610, from the camera's telemetry stream (radio port 16 + CAM)
 # CAM=N receives camera N (default 0): its video on radio port N, its telemetry on 0x10 + N (docs/DESIGN.md)
 # Receiver stats: the video wfb_rx's latest RX_ANT and PKT lines in /tmp/open-ipc-rx.stats
+# CAMS="0 1 2" receives several cameras at once (webview.py): camera N's video to UDP 5600 + N, its telemetry
+#   to 5610 + N, its stats in /tmp/open-ipc-rx.camN.stats
 # Ctrl-C hands the adapter(s) back to NetworkManager.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -29,8 +31,10 @@ IN_PORT=${IN_PORT:-5602}
 OUT_PORT=${OUT_PORT:-5600}
 TELEMETRY_PORT=${TELEMETRY_PORT:-5610}
 CAM=${CAM:-0}
-[[ $CAM =~ ^[0-9]$ ]] || { echo "CAM must be a camera number, 0-9" >&2; exit 1; }
-TELEMETRY_RADIO_PORT=$((16 + CAM))   # docs/DESIGN.md: 0x10 + camera index
+CAMS=${CAMS:-}
+for c in $CAM $CAMS; do
+  [[ $c =~ ^[0-9]$ ]] || { echo "CAM and CAMS take camera numbers, 0-9" >&2; exit 1; }
+done
 STATS_FILE=${STATS_FILE:-/tmp/open-ipc-rx.stats}
 WFB=../wfb-ng
 
@@ -98,17 +102,38 @@ for i in "${ifaces[@]}"; do
   monitor "$i"
 done
 
+# The latest RX_ANT (signal) and PKT (loss) pair of a wfb_rx's stats lines, kept in a file for burn-in
+keep_stats() {
+  awk -v f="$1" '/\tRX_ANT\t/ {ant = $0} /\tPKT\t/ {print ant > f; print > f; close(f)}'
+}
+
+# One camera's video (radio port N) and telemetry (0x10 + N, docs/DESIGN.md) to UDP. The telemetry's
+# per-second stats would crowd the terminal, so only its errors show; with several cameras, the video's too.
+# (2> comes first: a process substitution writes to stdout as it is when created.)
+receive_camera() {
+  local cam=$1 video_port=$2 telemetry_port=$3 stats=$4
+  if [[ -n $CAMS ]]; then
+    "$WFB/wfb_rx" -K "$GS_KEY" -p "$cam" -c 127.0.0.1 -u "$video_port" "$RX_IF" \
+      2> >(sed -u "s/^/[cam$cam] /") > >(keep_stats "$stats") &
+  else
+    "$WFB/wfb_rx" -K "$GS_KEY" -p "$cam" -c 127.0.0.1 -u "$video_port" "$RX_IF" \
+      > >(tee >(keep_stats "$stats") | sed -u 's/^/[rx] /') 2>&1 &
+  fi
+  pids+=($!)
+  "$WFB/wfb_rx" -K "$GS_KEY" -p "$((16 + cam))" -c 127.0.0.1 -u "$telemetry_port" "$RX_IF" \
+    2> >(sed -u "s/^/[telemetry $cam] /") > /dev/null &
+  pids+=($!)
+}
+
 if [[ $ROLE != tx ]]; then
   iw dev "$RX_IF" info | grep -E 'Interface|type|channel'
-  # Its stats lines also go to $STATS_FILE: the latest RX_ANT (signal) and PKT (loss) pair, for burn-in.
-  "$WFB/wfb_rx" -K "$GS_KEY" -p "$CAM" -c 127.0.0.1 -u "$OUT_PORT" "$RX_IF" \
-    > >(tee >(awk -v f="$STATS_FILE" '/\tRX_ANT\t/ {ant = $0} /\tPKT\t/ {print ant > f; print > f; close(f)}') \
-        | sed -u 's/^/[rx] /') 2>&1 &
-  pids+=($!)
-  # Telemetry: its per-second stats would crowd the terminal, so only its errors show.
-  "$WFB/wfb_rx" -K "$GS_KEY" -p "$TELEMETRY_RADIO_PORT" -c 127.0.0.1 -u "$TELEMETRY_PORT" "$RX_IF" \
-    > /dev/null 2> >(sed -u 's/^/[telemetry] /') &
-  pids+=($!)
+  if [[ -n $CAMS ]]; then
+    for c in $CAMS; do
+      receive_camera "$c" "$((OUT_PORT + c))" "$((TELEMETRY_PORT + c))" "${STATS_FILE%.stats}.cam$c.stats"
+    done
+  else
+    receive_camera "$CAM" "$OUT_PORT" "$TELEMETRY_PORT" "$STATS_FILE"
+  fi
 fi
 if [[ $ROLE != rx ]]; then
   iw dev "$TX_IF" set txpower fixed "$TX_POWER" 2>/dev/null || echo "note: $TX_IF ignored the txpower setting"
@@ -117,6 +142,10 @@ if [[ $ROLE != rx ]]; then
   pids+=($!)
 fi
 
-[[ $ROLE == tx ]] || echo "receiving camera $CAM"
-echo "link up ($ROLE, channel $CHANNEL). Video in: UDP :$IN_PORT, out: UDP :$OUT_PORT. Telemetry out: UDP :$TELEMETRY_PORT. Ctrl-C to stop."
+if [[ -n $CAMS && $ROLE != tx ]]; then
+  echo "link up ($ROLE, channel $CHANNEL), receiving cameras $CAMS: camera N's video to UDP :$OUT_PORT + N, telemetry to :$TELEMETRY_PORT + N. Ctrl-C to stop."
+else
+  [[ $ROLE == tx ]] || echo "receiving camera $CAM"
+  echo "link up ($ROLE, channel $CHANNEL). Video in: UDP :$IN_PORT, out: UDP :$OUT_PORT. Telemetry out: UDP :$TELEMETRY_PORT. Ctrl-C to stop."
+fi
 wait

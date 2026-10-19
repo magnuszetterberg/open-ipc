@@ -27,7 +27,8 @@ Receive the cameras with the base station (up to 3 cameras, anywhere on the netw
      ... --radar M         with the radar camera M: its finding as text, its picture beside the camera's
                            (RADAR_VIEW=text: the text only)
 
-Or with this PC's own WiFi adapter (no base station):
+Or with this PC's own WiFi adapter (no base station), on the channel the boards were built with (CHANNEL=N):
+  ./ipc view radio         every camera the adapter hears, live, in a browser on this PC
   ./ipc receive [N]        what the adapter hears, in a window: camera N (default 0), or a PC running ./ipc send
   ./ipc receive [N] URL    camera N to a video server (rtmp://...) with its telemetry burned in;
                            or a file name (cam0.mkv) to record
@@ -144,7 +145,7 @@ base_address() {
   fi
   if [[ -s $BASE_FILE ]]; then
     addr=$(<"$BASE_FILE")
-    if is_base "$addr"; then
+    if is_base "$addr" || ! command -v curl >/dev/null; then   # without curl, unchecked as before
       printf '%s\n' "$addr"
       return
     fi
@@ -152,6 +153,7 @@ base_address() {
   else
     say "Looking for the base station on this PC's networks..." >&2
   fi
+  command -v curl >/dev/null || die "I don't know the base station's address yet. Run ./ipc flash base, or give it: BASE=<its address> ./ipc $words"
   addr=$(find_base)
   [[ -n $addr ]] || die "no base station answers on this PC's networks ($(lan_networks | tr '\n' ' ')). Is it powered, with its Ethernet cable in? On another network: BASE=<its address> ./ipc $words"
   printf '%s\n' "$addr" >"$BASE_FILE"
@@ -301,6 +303,14 @@ open_firewall() {
   say "  To let it through this PC's firewall later: $rule"
 }
 
+# The channel to listen on: CHANNEL, else the one the boards were built with (their sdkconfig, R8), else
+# the design's channel 6.
+link_channel() {
+  local c=${CHANNEL:-}
+  [[ -n $c ]] || c=$(grep -ohP '^CONFIG_LINK_CHANNEL=\K[0-9]+' esp32/camera/sdkconfig esp32/base/sdkconfig 2>/dev/null | head -1 || true)
+  printf '%s\n' "${c:-6}"
+}
+
 # The WiFi adapter for a role (rx or tx): TX_IF/RX_IF if set, else the best one here (wifi.sh). Warns, and
 # asks, when it's this PC's network connection: monitor mode takes it over until Ctrl-C.
 adapter_for() {
@@ -333,7 +343,7 @@ receive() {
   say "$(key_status)"
   say "Receiving camera $cam. It asks for your password: the adapter is switched to monitor mode. Ctrl-C stops."
   if [[ -z $out ]]; then
-    RX_IF=$iface VIDEO=auto CAM=$cam exec pc/rx.sh
+    RX_IF=$iface VIDEO=auto CAM=$cam CHANNEL=$(link_channel) exec pc/rx.sh
   fi
   pc/build-wfb-ng.sh
   sudo -v
@@ -342,16 +352,41 @@ receive() {
   RECEIVE_LINK=""
   trap stop_receive EXIT
   trap 'exit 130' INT TERM
-  sudo env RX_IF="$iface" CAM="$cam" pc/link.sh rx &
+  sudo env RX_IF="$iface" CAM="$cam" CHANNEL="$(link_channel)" pc/link.sh rx &
   RECEIVE_LINK=$!
   sleep 2
   pc/burnin.sh "$out" || true
+}
+
+# Every camera this PC's own adapter hears, on the base station's web page, served by this PC (webview.py):
+# link.sh rx for all of them at once, no base station needed.
+view_radio() {
+  local iface channel cams=${CAMS:-0 1 2} web=${WEB_PORT:-8080}
+  iface=$(adapter_for rx)
+  channel=$(link_channel)
+  say "$(key_status)"
+  say "Receiving cameras $cams on channel $channel. It asks for your password: the adapter is switched to monitor mode. Ctrl-C stops."
+  pc/build-wfb-ng.sh
+  sudo -v
+  while sleep 60; do sudo -n -v; done &
+  RECEIVE_KEEPALIVE=$!
+  RECEIVE_LINK=""
+  trap stop_receive EXIT
+  trap 'exit 130' INT TERM
+  python3 pc/webview.py --cams $((${cams##* } + 1)) --http-port "$web" --bind "${WEB_BIND:-127.0.0.1}" &
+  RECEIVE_APP=$!
+  sudo env RX_IF="$iface" CAMS="$cams" CHANNEL="$channel" pc/link.sh rx &
+  RECEIVE_LINK=$!
+  sleep 2
+  open_url "http://localhost:$web/" "on this PC (WEB_BIND=0.0.0.0 ./ipc view radio shows it to the network)"
+  wait -n "$RECEIVE_LINK" "$RECEIVE_APP" || true
 }
 
 stop_receive() {
   trap '' INT TERM
   sudo pkill -TERM -f '[l]ink.sh rx' || true  # [l] keeps pkill from matching its own sudo
   if [[ -n ${RECEIVE_LINK:-} ]]; then wait "$RECEIVE_LINK" 2>/dev/null || true; fi
+  kill "${RECEIVE_APP:-}" 2>/dev/null || true
   kill "${RECEIVE_KEEPALIVE:-}" 2>/dev/null || true
 }
 
@@ -514,7 +549,7 @@ open_url() {
   if [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]] && command -v xdg-open >/dev/null; then
     xdg-open "$1" >/dev/null 2>&1 || true
   else
-    say "  (no desktop here: open it in a browser on any device on the same network)"
+    say "  (no desktop here: open it in a browser ${2:-on any device on the same network})"
   fi
 }
 
@@ -549,9 +584,13 @@ case "${1:-}" in
       *) unknown ;;
     esac ;;
   view)
-    (($# == 1)) || unknown
-    addr=$(base_address)
-    open_url "http://$addr/" ;;
+    if [[ $# == 2 && $2 == radio ]]; then
+      view_radio
+    else
+      (($# == 1)) || unknown
+      addr=$(base_address)
+      open_url "http://$addr/"
+    fi ;;
   stream)
     (($# <= 3)) || unknown
     n=${2:-}
