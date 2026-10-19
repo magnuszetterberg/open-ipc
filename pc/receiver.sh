@@ -4,6 +4,7 @@
 #
 #   ./receiver.sh                 H.264 (sender.sh); GStreamer if all its plugins are installed, else ffplay
 #   VIDEO=jpeg ./receiver.sh      RTP/JPEG (RFC 2435), what the ESP32-CAM sends
+#   VIDEO=radar ./receiver.sh     the radar camera's data, drawn by radar_render (docs/DESIGN.md, M9)
 #   VIDEO=auto ./receiver.sh      whichever arrives: waits for the first packet and looks at its type
 #   PLAYER=ffplay ./receiver.sh
 set -euo pipefail
@@ -11,9 +12,10 @@ cd "$(dirname "$0")"
 
 PORT=${PORT:-5600}
 PLAYER=${PLAYER:-auto}    # auto | gst | ffplay
-VIDEO=${VIDEO:-h264}      # h264 | jpeg | auto
+VIDEO=${VIDEO:-h264}      # h264 | jpeg | radar | auto
 
-# auto: RTP payload type 26 is JPEG (the ESP32-CAM), anything else H.264 (sender.sh uses 96).
+# auto: RTP payload type 26 is JPEG (the ESP32-CAM), other RTP H.264 (sender.sh uses 96), and a "D1"
+# payload the radar camera's data.
 if [[ $VIDEO == auto ]]; then
   echo "waiting for video on UDP $PORT..." >&2
   VIDEO=$(python3 -c '
@@ -26,8 +28,18 @@ while True:
     if len(d) >= 12 and d[0] >> 6 == 2:  # RTP version 2
         print("jpeg" if d[1] & 0x7f == 26 else "h264")
         break
+    if d[:2] == b"D1":
+        print("radar")
+        break
 ' "$PORT")
   echo "video: ${VIDEO^^}" >&2
+fi
+
+if [[ $VIDEO == radar ]]; then
+  ./build-radar-render.sh
+  # 10 pictures a second, drawn as the radar camera's own picture was
+  ./build/radar_render udp "$PORT" | exec ffplay -hide_banner -loglevel warning -window_title "radar :$PORT" \
+    -fflags nobuffer -flags low_delay -framedrop -f mjpeg -framerate 10 -i -
 fi
 
 case $VIDEO in
@@ -41,7 +53,7 @@ case $VIDEO in
     decode=(rtpjpegdepay ! jpegdec)
     elements=(rtpjpegdepay jpegdec)
     rtpmap="26 JPEG/90000" ;;
-  *) echo "unknown VIDEO: $VIDEO (h264, jpeg or auto)" >&2; exit 1 ;;
+  *) echo "unknown VIDEO: $VIDEO (h264, jpeg, radar or auto)" >&2; exit 1 ;;
 esac
 
 if [[ $PLAYER == auto ]]; then

@@ -601,7 +601,7 @@ case "${1:-}" in
     say "   ./ipc flash base sets it up for this PC.)"
     if [[ -n $radar ]]; then
       say "  With the radar camera $radar: its finding as text$([[ ${RADAR_VIEW:-beside} == beside ]] && echo ", its picture beside the camera's")."
-      export RADAR=$radar RADAR_IN=rtsp://$addr:8554/cam$radar
+      export RADAR=$radar RADAR_IN=${RADAR_IN:-http://$addr/cam$radar.data}
     fi
     VIDEO_IN=rtsp://$addr:8554/cam$n TELEMETRY_PORT=$((5610 + n)) exec pc/burnin.sh "${3:-}" ;;
   receive) (($# <= 3)) || unknown; receive "${2:-}" "${3:-}" ;;

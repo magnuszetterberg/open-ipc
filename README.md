@@ -5,7 +5,7 @@ Digital video links over [wfb-ng](https://github.com/svpcom/wfb-ng), the long-ra
 - **ESP32 cameras and a base station.** ESP32-CAM boards send JPEG video and telemetry over wfb-ng. An ESP32 with Ethernet (the Olimex ESP32-POE) receives up to three of them and serves each camera on the LAN: in a web page with its telemetry, as RTSP, and its telemetry as UDP.
 - **To a video server.** A PC burns each camera's telemetry and signal quality into its video, encodes H.264 and pushes it to an RTMP server.
 - **PC to PC.** A webcam on one Linux PC, encoded as H.264, to another PC's screen, with off-the-shelf WiFi adapters.
-- **A radar camera.** An NXP FRDM-RW612 board with the SR250 UWB radar shield sends what it detects (something moving, and how far away) as a camera's picture and telemetry, so it shows wherever a camera shows, and can go next to a camera's video. It sees in the dark and shows no faces.
+- **A radar camera.** An NXP FRDM-RW612 board with the SR250 UWB radar shield sends what it detects (something moving, and how far away), 20 times a second, as a few hundred bytes of data and telemetry. Wherever it's watched, that is drawn as a picture next to the cameras, and it can go next to a camera's video. It sees in the dark and shows no faces.
 
 ```
 ESP32-CAM 0..2 ─ wfb-ng, 2.4 GHz ─► base station (ESP32 + Ethernet) ─► LAN: web page, RTSP, telemetry
@@ -77,7 +77,7 @@ You need an [NXP FRDM-RW612](https://www.nxp.com/FRDM-RW612) board and the [SR25
 
 `./ipc setup radar` also says how to get SEGGER's J-Link tools (flashing goes through the board's J-Link) and gives the one sudo command that lets your user reach the J-Link. After flashing, the board only needs power.
 
-It is then camera 2, wherever cameras show: in `./ipc view`, or `./ipc receive 2` with this PC's adapter. The picture says what moves and how far away, shows the movement against distance (0 to 8 m), and the distance over the last 20 seconds; walk towards it and away to see it follow you. Distances count from the radar itself, at about 15 cm steps. What it finds also goes out as telemetry (`moving`, `distance_m`), and the base station passes that on with the other cameras' telemetry.
+It is then camera 2, wherever cameras show: in `./ipc view` or `./ipc view radio`, where the page draws it, or `./ipc receive 2` with this PC's adapter, where `radar_render` draws it in a window (built the first time; it needs only a C++ compiler). The picture says what moves and how far away, shows the movement against distance (0 to 8 m), and the distance over the last 20 seconds; walk towards it and away to see it follow you. Distances count from the radar itself, at about 15 cm steps. What it finds also goes out as telemetry (`moving`, `distance_m`), and the base station passes that on with the other cameras' telemetry.
 
 To put it next to a camera, in one video to the video server (or a file, or a window):
 
@@ -162,10 +162,11 @@ At the top there is only `./ipc`, which covers the everyday tasks. What it uses 
 | `pc/tx.sh` / `pc/rx.sh` | one command per PC for the PC-to-PC link (link + sender/receiver) |
 | `pc/link.sh [tx\|rx]` | puts the adapter in monitor mode and runs `wfb_tx` / `wfb_rx` (needs sudo); `rx` receives camera 0 (`CAM=N` another), and its telemetry on UDP 5610, and keeps the latest signal stats in `/tmp/open-ipc-rx.stats`; `CAMS="0 1 2"` receives several, camera N on UDP 5600 + N and 5610 + N |
 | `pc/webview.py` | the base station's web page, served by this PC from what `link.sh` receives (`./ipc view radio`) |
+| `pc/radar_render.cpp` | the radar camera's data drawn as video (MJPEG), for `receiver.sh` and `burnin.sh`; `pc/build-radar-render.sh` builds it |
 | `pc/wifi.sh` | which WiFi adapter sends or receives, and which keys: used by `link.sh` and `ipc` |
 | `pc/sender.sh` | webcam or test pattern → H.264 → RTP; burns a `TX hh:mm:ss.mmm` timestamp into each frame (`overlay.txt`) |
-| `pc/receiver.sh` | RTP → low-latency video window |
-| `pc/burnin.sh` | a camera's video with its telemetry and signal quality burned in, as H.264: to RTMP, a file, or a window. Reads `FPS=25`, `BITRATE=2M`, `PORT`, `TELEMETRY_PORT`, `STATS_FILE`, and `VIDEO_IN=rtsp://...` for the base station's streams; `RADAR=N` and `RADAR_IN=rtsp://...` add the radar camera (`RADAR_VIEW=beside` or `text`, `HEIGHT=480`) |
+| `pc/receiver.sh` | RTP → low-latency video window; the radar camera's data through `radar_render` |
+| `pc/burnin.sh` | a camera's video with its telemetry and signal quality burned in, as H.264: to RTMP, a file, or a window. Reads `FPS=25`, `BITRATE=2M`, `PORT`, `TELEMETRY_PORT`, `STATS_FILE`, and `VIDEO_IN=rtsp://...` for the base station's streams; `RADAR=N` and `RADAR_IN=http://<base>/camN.data` (or `udp:5602` from `link.sh`) add the radar camera (`RADAR_VIEW=beside` or `text`, `HEIGHT=480`) |
 | `pc/radar_view.py` | the radar's raw measurements in a browser page, for working on the radar itself (the firmware's "raw measurements" setting) |
 | `pc/telemetry_overlay.py` | keeps the overlay text for `burnin.sh` |
 | `pc/build-wfb-ng.sh` | fetches and builds wfb-ng if needed |
